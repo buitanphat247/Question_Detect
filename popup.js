@@ -402,12 +402,81 @@ function inPageExtractQA() {
       }
 
       let imgSrc = extractImageUrl(qtextEl || box);
-      if (!imgSrc && box) {
-        imgSrc = extractImageUrl(box.parentElement) || extractImageUrl(box.previousElementSibling);
+      if (!imgSrc) {
+        const allMedia = Array.from(document.querySelectorAll('img, svg, canvas, .yh-player-media, .yh-player-media--section, [class*="player-media"], [class*="section-media"]'));
+        const preceding = allMedia.filter(el => !box.contains(el) && (el.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING));
+        for (let i = preceding.length - 1; i >= 0; i--) {
+          const el = preceding[i];
+          const otherBox = el.closest(containerSelectors.join(', '));
+          if (otherBox && otherBox !== box) continue;
+          const candidate = extractImageUrl(el);
+          if (candidate) {
+            imgSrc = candidate;
+            break;
+          }
+        }
       }
       const options = [];
       const qId = `qa-detected-quiz-${qNum}`;
       box.setAttribute('data-qa-id', qId);
+
+      // Kiểm tra dạng câu hỏi Đúng / Sai 4 ý (Phần II)
+      const yhTfRows = Array.from(box.querySelectorAll('.yh-tf4-row'));
+      if (yhTfRows.length > 0) {
+        const tfItems = [];
+        yhTfRows.forEach((row, rIdx) => {
+          let key = String.fromCharCode(65 + rIdx);
+          const keyElem = row.querySelector('.yh-tf4-stem__key, .key, b, strong');
+          if (keyElem) {
+            const m = (keyElem.innerText || keyElem.textContent || '').match(/([A-D])/i);
+            if (m) key = m[1].toUpperCase();
+          }
+          const stemEl = row.querySelector('.yh-tf4-stem__text, .stem-text, [class*="text"]') || row;
+          const statement = cleanText(stemEl.innerText || stemEl.textContent || '');
+
+          const trueInp = row.querySelector('.yh-tf4-true input, [class*="true"] input') || row.querySelectorAll('input')[0];
+          if (trueInp) {
+            trueInp.setAttribute('data-qa-for', qId);
+            trueInp.setAttribute('data-qa-opt', `${key}_TRUE`);
+            const wrap = trueInp.closest('label, .ant-radio-wrapper') || trueInp.parentElement;
+            if (wrap) {
+              wrap.setAttribute('data-qa-for', qId);
+              wrap.setAttribute('data-qa-opt', `${key}_TRUE`);
+            }
+          }
+          const falseInp = row.querySelector('.yh-tf4-false input, [class*="false"] input') || row.querySelectorAll('input')[1];
+          if (falseInp) {
+            falseInp.setAttribute('data-qa-for', qId);
+            falseInp.setAttribute('data-qa-opt', `${key}_FALSE`);
+            const wrap = falseInp.closest('label, .ant-radio-wrapper') || falseInp.parentElement;
+            if (wrap) {
+              wrap.setAttribute('data-qa-for', qId);
+              wrap.setAttribute('data-qa-opt', `${key}_FALSE`);
+            }
+          }
+
+          tfItems.push({
+            key: key,
+            statement: statement
+          });
+        });
+
+        const qObj = {
+          id: qId,
+          num: qNum,
+          index: idx + 1,
+          type: 'true_false_group',
+          title: cleanText(title),
+          passage: passageText,
+          image: imgSrc,
+          items: tfItems,
+          options: [],
+          selectedAnswers: {},
+          aiSolution: null
+        };
+        questionsMap.set(qNum, qObj);
+        return;
+      }
 
       const inputs = Array.from(box.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
         .filter(inp => !inp.closest('.qtype_multichoice_clearchoice') && isVisible(inp.parentElement || inp));
@@ -2219,7 +2288,10 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   // Giải toàn bộ câu hỏi và tự động chọn trên web
   btnSolveAll.addEventListener('click', async () => {
     if (allQuestions.length === 0) {
-      await performAIScan();
+      await performScan();
+      if (allQuestions.length === 0) {
+        await performAIScan();
+      }
       if (allQuestions.length === 0) return;
     }
 
@@ -2793,8 +2865,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     showToast('Đã tải file câu hỏi!');
   });
 
-  // Tự động quét bằng AI khi mở popup
+  // Tự động quét DOM siêu tốc khi mở popup (kết quả tức thì trong ~50ms)
   setTimeout(() => {
-    performAIScan();
-  }, 200);
+    performScan();
+  }, 100);
 });
