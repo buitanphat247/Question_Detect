@@ -1148,32 +1148,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   function setScanningState(isScanning) {
+    if (!btnScan) return;
     const icon = btnScan.querySelector('.icon-spin-target');
     const text = btnScan.querySelector('span');
     if (isScanning) {
-      icon.classList.add('spin');
-      text.textContent = 'Đang quét...';
+      if (icon) icon.classList.add('spin');
+      if (text) text.textContent = 'Đang quét...';
       btnScan.disabled = true;
     } else {
-      icon.classList.remove('spin');
-      text.textContent = 'Quét DOM';
+      if (icon) icon.classList.remove('spin');
+      if (text) text.textContent = 'Quét DOM';
       btnScan.disabled = false;
     }
   }
 
   function setAIScanningState(isScanning) {
+    if (!btnScanAI) return;
     const icon = btnScanAI.querySelector('.icon-ai-spin');
     const text = btnScanAI.querySelector('span');
     if (isScanning) {
-      icon.classList.add('spin');
-      text.textContent = 'AI phân tích...';
+      if (icon) icon.classList.add('spin');
+      if (text) text.textContent = 'AI phân tích...';
       btnScanAI.disabled = true;
-      btnScan.disabled = true;
+      if (btnScan) btnScan.disabled = true;
+      if (btnSolveAll) btnSolveAll.disabled = true;
     } else {
-      icon.classList.remove('spin');
-      text.textContent = '🧠 Quét AI';
+      if (icon) icon.classList.remove('spin');
+      if (text) text.textContent = '🧠 Quét AI';
       btnScanAI.disabled = false;
-      btnScan.disabled = false;
+      if (btnScan) btnScan.disabled = false;
+      if (btnSolveAll) btnSolveAll.disabled = false;
     }
   }
 
@@ -1638,19 +1642,6 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     renderQuestions(filtered, true);
   });
 
-  function setScanningState(isScanning) {
-    const icon = btnScan.querySelector('.icon-spin-target');
-    const text = btnScan.querySelector('span');
-    if (isScanning) {
-      icon.classList.add('spin');
-      text.textContent = 'Đang quét...';
-      btnScan.disabled = true;
-    } else {
-      icon.classList.remove('spin');
-      text.textContent = 'Quét trang';
-      btnScan.disabled = false;
-    }
-  }
 
   function renderQuestions(items, isFiltered = false) {
     questionCount.textContent = items.length;
@@ -1926,6 +1917,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     showToast('Đã tải file câu hỏi!');
   });
 
-  // Tự động quét khi mở popup
-  setTimeout(performScan, 150);
+  // Tự động quét bằng AI khi mở popup
+  setTimeout(() => {
+    performAIScan();
+  }, 200);
 });
