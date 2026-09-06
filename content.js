@@ -945,4 +945,5 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   }
 
   console.log('%c[Q&A AutoSolver] Sẵn sàng! Nhấn Alt + H trên trang để tự động giải & chọn đáp án.', 'color: #10b981; font-weight: bold;');
+  triggerAutoSolveFromPage();
 })();
