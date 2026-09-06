@@ -895,6 +895,36 @@ function inPageAutoSelect(qaId, targetKey, optionText) {
 
   for (const container of qContainers) {
     if (!container) continue;
+
+    // 2.0: Dành riêng cho câu hỏi Đúng / Sai theo từng ý (A_TRUE, A_FALSE, B_TRUE, B_FALSE...)
+    const tfMatch = cleanKey.match(/^([A-D])_(TRUE|FALSE)$/i);
+    if (tfMatch) {
+      const subKey = tfMatch[1].toUpperCase();
+      const wantTrue = tfMatch[2].toUpperCase() === 'TRUE';
+      const tfRows = Array.from(container.querySelectorAll('.yh-tf4-row, .ant-space-item, tr, div')).filter(r => {
+        const inps = r.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+        return inps.length >= 2;
+      });
+
+      for (let rIdx = 0; rIdx < tfRows.length; rIdx++) {
+        const row = tfRows[rIdx];
+        const rowText = (row.innerText || '').trim();
+        const keyElem = row.querySelector('.yh-tf4-stem__key, .key, b, strong');
+        const keyMatch = rowText.match(/^[A-D][\.\)]/i);
+        const rowKey = keyElem ? (keyElem.innerText || '').replace(/[^A-D]/gi, '').toUpperCase() : (keyMatch ? keyMatch[0].charAt(0).toUpperCase() : String.fromCharCode(65 + rIdx));
+
+        if (rowKey === subKey) {
+          const targetCont = wantTrue
+            ? (row.querySelector('.yh-tf4-true') || Array.from(row.querySelectorAll('label, div')).find(el => /\bđúng\b|\btrue\b/i.test(el.innerText || '')))
+            : (row.querySelector('.yh-tf4-false') || Array.from(row.querySelectorAll('label, div')).find(el => /\bsai\b|\bfalse\b/i.test(el.innerText || '')));
+
+          const inps = row.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+          const targetInp = targetCont ? findRadioInput(targetCont) : (wantTrue ? inps[0] : inps[1]);
+          if (forceClickTarget(targetInp, targetCont || row)) return true;
+        }
+      }
+    }
+
     const inputs = Array.from(container.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
       .filter(inp => !inp.closest('.qtype_multichoice_clearchoice'));
 
@@ -1048,25 +1078,77 @@ function inPageMapAiQuestions(parsedQuestions) {
     if (qCard) {
       qCard.setAttribute('data-qa-id', qId);
 
-      const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
-      if (inputs.length >= 2) {
-        inputs.forEach((inp, idx) => {
-          const key = String.fromCharCode(65 + idx);
-          inp.setAttribute('data-qa-for', qId);
-          inp.setAttribute('data-qa-opt', key);
-          const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
-          if (wrapper) {
-            wrapper.setAttribute('data-qa-for', qId);
-            wrapper.setAttribute('data-qa-opt', key);
+      // Kiểm tra xem đây có phải dạng câu hỏi Đúng / Sai 4 ý không
+      const yhTfRows = Array.from(qCard.querySelectorAll('.yh-tf4-row'));
+      const isTF = (q.type === 'true_false_group') || yhTfRows.length > 0;
+
+      if (isTF) {
+        let tfRows = yhTfRows;
+        if (tfRows.length === 0) {
+          const candidates = Array.from(qCard.querySelectorAll('.ant-space-item, tr, .form-check-inline, div'));
+          tfRows = candidates.filter(r => {
+            const inps = r.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+            return inps.length === 2 && /đúng|sai|true|false/i.test(r.innerText || '');
+          });
+        }
+
+        tfRows.forEach((row, rIdx) => {
+          let key = String.fromCharCode(65 + rIdx);
+          const keyElem = row.querySelector('.yh-tf4-stem__key, .key, b, strong');
+          if (keyElem) {
+            const m = (keyElem.innerText || '').match(/([A-D])/i);
+            if (m) key = m[1].toUpperCase();
+          }
+
+          // Đúng
+          const trueCont = row.querySelector('.yh-tf4-true') || 
+            Array.from(row.querySelectorAll('label, div, span')).find(el => /\bđúng\b|\btrue\b/i.test(el.innerText || ''));
+          const trueInp = trueCont ? (trueCont.tagName === 'INPUT' ? trueCont : trueCont.querySelector('input')) : row.querySelectorAll('input')[0];
+          if (trueInp) {
+            trueInp.setAttribute('data-qa-for', qId);
+            trueInp.setAttribute('data-qa-opt', `${key}_TRUE`);
+            const wrap = trueInp.closest('label, .ant-radio-wrapper') || trueInp.parentElement;
+            if (wrap) {
+              wrap.setAttribute('data-qa-for', qId);
+              wrap.setAttribute('data-qa-opt', `${key}_TRUE`);
+            }
+          }
+
+          // Sai
+          const falseCont = row.querySelector('.yh-tf4-false') || 
+            Array.from(row.querySelectorAll('label, div, span')).find(el => /\bsai\b|\bfalse\b/i.test(el.innerText || ''));
+          const falseInp = falseCont ? (falseCont.tagName === 'INPUT' ? falseCont : falseCont.querySelector('input')) : row.querySelectorAll('input')[1];
+          if (falseInp) {
+            falseInp.setAttribute('data-qa-for', qId);
+            falseInp.setAttribute('data-qa-opt', `${key}_FALSE`);
+            const wrap = falseInp.closest('label, .ant-radio-wrapper') || falseInp.parentElement;
+            if (wrap) {
+              wrap.setAttribute('data-qa-for', qId);
+              wrap.setAttribute('data-qa-opt', `${key}_FALSE`);
+            }
           }
         });
       } else {
-        const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
-        rows.forEach((row, idx) => {
-          const key = String.fromCharCode(65 + idx);
-          row.setAttribute('data-qa-for', qId);
-          row.setAttribute('data-qa-opt', key);
-        });
+        const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+        if (inputs.length >= 2) {
+          inputs.forEach((inp, idx) => {
+            const key = String.fromCharCode(65 + idx);
+            inp.setAttribute('data-qa-for', qId);
+            inp.setAttribute('data-qa-opt', key);
+            const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
+            if (wrapper) {
+              wrapper.setAttribute('data-qa-for', qId);
+              wrapper.setAttribute('data-qa-opt', key);
+            }
+          });
+        } else {
+          const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
+          rows.forEach((row, idx) => {
+            const key = String.fromCharCode(65 + idx);
+            row.setAttribute('data-qa-for', qId);
+            row.setAttribute('data-qa-opt', key);
+          });
+        }
       }
     }
   });
@@ -1283,30 +1365,46 @@ document.addEventListener('DOMContentLoaded', async () => {
 Hãy đọc kỹ văn bản đề thi dưới đây và trích xuất TOÀN BỘ các câu hỏi trắc nghiệm thành một mảng JSON hợp lệ.
 
 CÁC NGUYÊN TẮC BẮT BUỘC:
-1. ĐOẠN VĂN ĐỌC HIỂU (Reading passage, Announcement, Đoạn văn điền từ, Dữ liệu chung...):
-   - Nếu có đoạn văn dùng chung cho một nhóm câu (ví dụ: từ câu 13 đến 16, hoặc bài đọc 31-36...), BẮT BUỘC phải trích xuất TOÀN BỘ nội dung bài đọc đó vào trường "passage" của tất cả các câu hỏi thuộc nhóm đó!
-   - Nếu là câu hỏi độc lập bình thường không có bài đọc hiểu, để "passage": null.
-2. BỎ QUA CÁC THÀNH PHẦN RÁC:
-   - Đồng hồ đếm ngược (ví dụ 54:20), bảng danh sách câu hỏi, điểm số (ví dụ Điểm: 0.25), nút nộp bài, thông tin người dùng.
-3. CẤU TRÚC MỖI CÂU HỎI TRONG MẢNG:
-   - "num": số thứ tự câu hỏi (số nguyên, ví dụ 1, 2, 13...)
-   - "title": đề bài câu hỏi (hoặc câu hỏi ngắn, KHÔNG bao gồm bài đọc hiểu chung)
-   - "passage": nội dung đoạn văn đọc hiểu chung (nếu có, hoặc null)
-   - "options": mảng các lựa chọn, mỗi phần tử là {"key": "A"|"B"|"C"|"D", "text": "nội dung đáp án đã bỏ tiền tố A/B/C/D và bỏ điểm số"}
+1. PHÂN BIỆT RÕ 2 DẠNG CÂU HỎI ("type"):
+   - Dạng 1: "single_choice" - Câu trắc nghiệm thông thường (chọn 1 trong 4 đáp án A, B, C, D).
+   - Dạng 2: "true_false_group" - Dạng Đúng / Sai 4 ý (Phần II theo form mới Bộ GD&ĐT), mỗi câu có 4 mệnh đề A, B, C, D (hoặc a, b, c, d) và mỗi mệnh đề có 2 lựa chọn Đúng / Sai.
+
+2. ĐOẠN VĂN ĐỌC HIỂU / ĐOẠN TƯ LIỆU DÙNG CHUNG ("passage"):
+   - Nếu có đoạn văn đọc hiểu, đoạn tư liệu dùng chung cho một nhóm câu (hoặc 1 câu):
+     BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc/tư liệu đó vào trường "passage".
+   - Nếu câu độc lập không có bài đọc hiểu/tư liệu chung, để "passage": null.
+
+3. BỎ QUA CÁC THÀNH PHẦN RÁC:
+   - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số, chữ "Đúng Sai" bị lặp rác, nút nộp bài.
+
+4. CẤU TRÚC JSON MỖI PHẦN TỬ:
+   - Nếu là dạng "single_choice":
+     {
+       "num": 1,
+       "type": "single_choice",
+       "passage": null,
+       "title": "Nội dung câu hỏi...",
+       "options": [
+         { "key": "A", "text": "nội dung đáp án A..." },
+         { "key": "B", "text": "nội dung đáp án B..." }
+       ]
+     }
+   - Nếu là dạng "true_false_group":
+     {
+       "num": 27,
+       "type": "true_false_group",
+       "passage": "nội dung đoạn tư liệu... nếu có hoặc null",
+       "title": "đề bài chung (ví dụ: Cho đoạn tư liệu sau đây:)",
+       "items": [
+         { "key": "A", "statement": "mệnh đề A..." },
+         { "key": "B", "statement": "mệnh đề B..." },
+         { "key": "C", "statement": "mệnh đề C..." },
+         { "key": "D", "statement": "mệnh đề D..." }
+       ]
+     }
 
 ĐỊNH DẠNG ĐẦU RA:
-Chỉ trả về DUY NHẤT một khối JSON hợp lệ dạng:
-[
-  {
-    "num": 1,
-    "passage": null,
-    "title": "Nội dung câu hỏi...",
-    "options": [
-      { "key": "A", "text": "..." },
-      { "key": "B", "text": "..." }
-    ]
-  }
-]
+Chỉ trả về DUY NHẤT một khối JSON hợp lệ dạng mảng [...].
 
 VĂN BẢN ĐỀ THI:
 ${pageText.slice(0, 45000)}`;
@@ -1355,12 +1453,38 @@ ${pageText.slice(0, 45000)}`;
 
       // Chuẩn hóa thành allQuestions để render
       allQuestions = parsedQuestions.map((item, idx) => {
-        let finalTitle = item.title || `Câu hỏi ${item.num || (idx + 1)}`;
-        if (item.passage) {
-          finalTitle = `[ĐỌC HIỂU / READING PASSAGE]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
-        }
         const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
         const qId = `qa-detected-ai-${qNum}`;
+        const isTF = item.type === 'true_false_group' || (item.items && item.items.length > 0);
+
+        let finalTitle = item.title || `Câu hỏi ${qNum}`;
+        if (item.passage) {
+          finalTitle = `[ĐỌC HIỂU / TƯ LIỆU]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
+        }
+
+        if (isTF) {
+          const tfItems = (item.items || []).map((it, itIdx) => {
+            const key = (it.key || String.fromCharCode(65 + itIdx)).toUpperCase();
+            return {
+              key: key,
+              statement: (it.statement || it.text || '').trim()
+            };
+          });
+
+          return {
+            id: qId,
+            num: qNum,
+            index: idx + 1,
+            type: 'true_false_group',
+            title: finalTitle,
+            image: null,
+            items: tfItems,
+            options: [],
+            selectedAnswers: {},
+            aiSolution: null
+          };
+        }
+
         const options = (item.options || []).map((o, optIdx) => {
           const key = (o.key || String.fromCharCode(65 + optIdx)).toUpperCase();
           const optText = (o.text || '').trim();
@@ -1376,10 +1500,12 @@ ${pageText.slice(0, 45000)}`;
           id: qId,
           num: qNum,
           index: idx + 1,
+          type: 'single_choice',
           title: finalTitle,
           image: null,
           options: options,
-          selectedAnswer: null
+          selectedAnswer: null,
+          aiSolution: null
         };
       });
 
@@ -1400,7 +1526,69 @@ ${pageText.slice(0, 45000)}`;
     const apiKey = txtApiKey.value.trim() || DEFAULT_API_KEY;
     const model = txtModel.value.trim() || DEFAULT_MODEL;
 
-    const optionsText = q.options.map(o => `${o.key}. ${o.text}`).join('\n');
+    // 1. Dạng câu hỏi Đúng / Sai 4 ý (Phần II)
+    if (q.type === 'true_false_group') {
+      const itemsText = (q.items || []).map(it => `${it.key}. ${it.statement}`).join('\n');
+      const prompt = `Bạn là chuyên gia giải đề thi trắc nghiệm siêu chính xác.
+Dưới đây là câu hỏi dạng ĐÚNG / SAI 4 Ý (Phần II theo form mới Bộ GD&ĐT).
+Hãy đọc kỹ đoạn tư liệu/đề bài và đánh giá từng mệnh đề A, B, C, D là "Đúng" hay "Sai".
+
+ĐỀ BÀI / ĐOẠN TƯ LIỆU:
+${q.title}
+
+CÁC MỆNH ĐỀ:
+${itemsText}
+
+YÊU CẦU:
+Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
+{
+  "answers": {
+    "A": "Đúng" hoặc "Sai",
+    "B": "Đúng" hoặc "Sai",
+    "C": "Đúng" hoặc "Sai",
+    "D": "Đúng" hoặc "Sai"
+  },
+  "explanation": "Giải thích ngắn gọn cho từng ý"
+}`;
+
+      const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`Key4U API lỗi (${res.status}): ${errBody.slice(0, 150)}`);
+      }
+
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content || '';
+
+      let parsed = null;
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*?\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch (e) {}
+
+      if (!parsed || !parsed.answers) {
+        throw new Error('AI không trả về đáp án Đúng/Sai hợp lệ.');
+      }
+      return parsed;
+    }
+
+    // 2. Dạng trắc nghiệm 1 đáp án A, B, C, D thông thường
+    const optionsText = (q.options || []).map(o => `${o.key}. ${o.text}`).join('\n');
     const prompt = `Bạn là một chuyên gia giải đề trắc nghiệm siêu chính xác.
 Hãy đọc câu hỏi và các phương án lựa chọn dưới đây, sau đó tìm ra ĐÁP ÁN ĐÚNG NHẤT.
 
@@ -1554,15 +1742,29 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
 
         const aiResult = await solveQuestionWithAI(q);
         q.aiSolution = aiResult;
-        q.selectedAnswer = aiResult.answer;
-
-        // Tự động chọn trên web nếu được bật (kèm text để so khớp chuẩn 100%)
-        const matchedOpt = q.options.find(o => o.key === aiResult.answer);
-        const optText = matchedOpt ? matchedOpt.text : '';
         let isWebSelected = false;
 
-        if (chkAutoSelectWeb.checked) {
-          isWebSelected = await triggerWebSelect(q.id, aiResult.answer, optText);
+        if (q.type === 'true_false_group') {
+          q.selectedAnswers = aiResult.answers || {};
+          if (chkAutoSelectWeb.checked) {
+            let allSubOk = true;
+            for (const subKey of ['A', 'B', 'C', 'D']) {
+              if (aiResult.answers[subKey]) {
+                const isTrue = /đúng|true/i.test(aiResult.answers[subKey]);
+                const targetKey = isTrue ? `${subKey}_TRUE` : `${subKey}_FALSE`;
+                const ok = await triggerWebSelect(q.id, targetKey, isTrue ? 'Đúng' : 'Sai');
+                if (!ok) allSubOk = false;
+              }
+            }
+            isWebSelected = allSubOk;
+          }
+        } else {
+          q.selectedAnswer = aiResult.answer;
+          if (chkAutoSelectWeb.checked) {
+            const matchedOpt = (q.options || []).find(o => o.key === aiResult.answer);
+            const optText = matchedOpt ? matchedOpt.text : '';
+            isWebSelected = await triggerWebSelect(q.id, aiResult.answer, optText);
+          }
         }
 
         // Cập nhật thẻ Card trên Popup
@@ -1596,6 +1798,47 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   // Hiển thị kết quả AI trên Card
   function renderAiSolutionInCard(card, aiResult, q, isWebSelected = false) {
     if (!card) return;
+
+    if (q.type === 'true_false_group') {
+      const ans = aiResult.answers || {};
+      card.querySelectorAll('.tf-statement-row').forEach(row => {
+        const k = row.dataset.key;
+        const val = (ans[k] || '').toLowerCase().trim();
+        const isTrue = val.includes('đúng') || val.includes('true');
+        const btnTrue = row.querySelector('.btn-tf-true');
+        const btnFalse = row.querySelector('.btn-tf-false');
+        if (btnTrue && btnFalse) {
+          if (isTrue) {
+            btnTrue.classList.add('active');
+            btnFalse.classList.remove('active');
+          } else {
+            btnFalse.classList.add('active');
+            btnTrue.classList.remove('active');
+          }
+        }
+      });
+
+      let solutionBox = card.querySelector('.ai-solution-box');
+      if (!solutionBox) {
+        solutionBox = document.createElement('div');
+        solutionBox.className = 'ai-solution-box';
+        card.appendChild(solutionBox);
+      }
+
+      const summary = Object.entries(ans).map(([k, v]) => `${k}: <b>${v}</b>`).join(' | ');
+      const badgeStatus = isWebSelected 
+        ? `<span style="font-size:11px; color:#10b981; font-weight:600;">✓ Đã chọn 4 ý trên web</span>`
+        : `<span style="font-size:11px; color:#f59e0b;">(Đã giải AI)</span>`;
+
+      solutionBox.innerHTML = `
+        <div class="ai-solution-header">
+          <span>🤖 AI (GPT-5.5) chọn: <span class="ai-badge-choice" style="font-size: 11px;">${summary}</span></span>
+          ${badgeStatus}
+        </div>
+        <div class="ai-explanation">${aiResult.explanation || ''}</div>
+      `;
+      return;
+    }
 
     // Highlight option tương ứng trong popup
     card.querySelectorAll('.option-item').forEach(optEl => {
@@ -1635,9 +1878,10 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       return;
     }
     const filtered = allQuestions.filter(q => {
-      const inTitle = q.title.toLowerCase().includes(keyword);
-      const inOptions = q.options.some(opt => opt.text.toLowerCase().includes(keyword) || opt.raw.toLowerCase().includes(keyword));
-      return inTitle || inOptions;
+      const inTitle = (q.title || '').toLowerCase().includes(keyword);
+      const inOptions = (q.options || []).some(opt => (opt.text || '').toLowerCase().includes(keyword) || (opt.raw || '').toLowerCase().includes(keyword));
+      const inItems = (q.items || []).some(it => (it.statement || '').toLowerCase().includes(keyword));
+      return inTitle || inOptions || inItems;
     });
     renderQuestions(filtered, true);
   });
@@ -1669,19 +1913,20 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       const header = document.createElement('div');
       header.className = 'question-header';
 
+      const isTF = q.type === 'true_false_group';
       const tag = document.createElement('span');
-      tag.className = 'q-index-tag';
-      tag.textContent = `Câu ${q.num || q.index || (idx + 1)}`;
+      tag.className = 'q-index-tag' + (isTF ? ' q-tag-tf' : '');
+      tag.textContent = isTF ? `Câu ${q.num || q.index} (Đúng/Sai)` : `Câu ${q.num || q.index || (idx + 1)}`;
 
       const title = document.createElement('div');
       title.className = 'q-text';
       let displayTitle = (q.title || '');
-      if (!displayTitle.includes('[ĐỌC HIỂU')) {
+      if (!displayTitle.includes('[ĐỌC HIỂU') && !displayTitle.includes('[TƯ LIỆU')) {
         displayTitle = displayTitle.replace(/^(?:question|câu|câu\s*hỏi|bài|item|q)\s*\d+[\.\:\s\-]+/i, '').trim();
       }
       if (!displayTitle) displayTitle = q.title;
       title.textContent = displayTitle;
-      if (displayTitle.includes('[ĐỌC HIỂU')) {
+      if (displayTitle.includes('[ĐỌC HIỂU') || displayTitle.includes('[TƯ LIỆU')) {
         title.style.whiteSpace = 'pre-wrap';
         title.style.maxHeight = '200px';
         title.style.overflowY = 'auto';
@@ -1706,20 +1951,37 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         try {
           const aiResult = await solveQuestionWithAI(q);
           q.aiSolution = aiResult;
-          q.selectedAnswer = aiResult.answer;
-
-          const matchedOpt = q.options.find(o => o.key === aiResult.answer);
-          const optText = matchedOpt ? matchedOpt.text : '';
           let isWebSelected = false;
 
-          if (chkAutoSelectWeb.checked) {
-            isWebSelected = await triggerWebSelect(q.id, aiResult.answer, optText);
-          }
-          renderAiSolutionInCard(card, aiResult, q, isWebSelected);
-          if (isWebSelected) {
-            showToast(`Câu ${q.num || q.index}: AI đã chọn ${aiResult.answer} trên trang web!`);
+          if (q.type === 'true_false_group') {
+            q.selectedAnswers = aiResult.answers || {};
+            if (chkAutoSelectWeb.checked) {
+              let allSubOk = true;
+              for (const subKey of ['A', 'B', 'C', 'D']) {
+                if (aiResult.answers[subKey]) {
+                  const isTrue = /đúng|true/i.test(aiResult.answers[subKey]);
+                  const targetKey = isTrue ? `${subKey}_TRUE` : `${subKey}_FALSE`;
+                  const ok = await triggerWebSelect(q.id, targetKey, isTrue ? 'Đúng' : 'Sai');
+                  if (!ok) allSubOk = false;
+                }
+              }
+              isWebSelected = allSubOk;
+            }
+            renderAiSolutionInCard(card, aiResult, q, isWebSelected);
+            showToast(`Câu ${q.num || q.index}: Đã giải 4 ý Đúng/Sai!`);
           } else {
-            showToast(`Câu ${q.num || q.index}: AI chọn ${aiResult.answer}`);
+            q.selectedAnswer = aiResult.answer;
+            const matchedOpt = (q.options || []).find(o => o.key === aiResult.answer);
+            const optText = matchedOpt ? matchedOpt.text : '';
+            if (chkAutoSelectWeb.checked) {
+              isWebSelected = await triggerWebSelect(q.id, aiResult.answer, optText);
+            }
+            renderAiSolutionInCard(card, aiResult, q, isWebSelected);
+            if (isWebSelected) {
+              showToast(`Câu ${q.num || q.index}: AI đã chọn ${aiResult.answer} trên trang web!`);
+            } else {
+              showToast(`Câu ${q.num || q.index}: AI chọn ${aiResult.answer}`);
+            }
           }
         } catch (e) {
           showToast(e.message, true);
@@ -1784,7 +2046,60 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         card.appendChild(imgContainer);
       }
 
-      if (q.options && q.options.length > 0) {
+      if (isTF && q.items && q.items.length > 0) {
+        const tfContainer = document.createElement('div');
+        tfContainer.className = 'tf-statements-list';
+
+        q.items.forEach(it => {
+          const row = document.createElement('div');
+          row.className = 'tf-statement-row';
+          row.dataset.key = it.key;
+
+          const stem = document.createElement('div');
+          stem.className = 'tf-stem';
+          stem.innerHTML = `<span class="opt-badge">${it.key}</span> <span class="tf-text">${it.statement}</span>`;
+
+          const btnGroup = document.createElement('div');
+          btnGroup.className = 'tf-btn-group';
+
+          const currVal = q.selectedAnswers ? q.selectedAnswers[it.key] : null;
+
+          const btnTrue = document.createElement('button');
+          btnTrue.type = 'button';
+          btnTrue.className = 'btn-tf btn-tf-true' + (currVal === 'Đúng' ? ' active' : '');
+          btnTrue.textContent = 'Đúng';
+          btnTrue.addEventListener('click', async () => {
+            const isOk = await triggerWebSelect(q.id, `${it.key}_TRUE`, 'Đúng');
+            if (!q.selectedAnswers) q.selectedAnswers = {};
+            q.selectedAnswers[it.key] = 'Đúng';
+            btnTrue.classList.add('active');
+            btnFalse.classList.remove('active');
+            showToast(`Câu ${q.num || q.index} - Ý ${it.key}: Đã chọn Đúng!`);
+          });
+
+          const btnFalse = document.createElement('button');
+          btnFalse.type = 'button';
+          btnFalse.className = 'btn-tf btn-tf-false' + (currVal === 'Sai' ? ' active' : '');
+          btnFalse.textContent = 'Sai';
+          btnFalse.addEventListener('click', async () => {
+            const isOk = await triggerWebSelect(q.id, `${it.key}_FALSE`, 'Sai');
+            if (!q.selectedAnswers) q.selectedAnswers = {};
+            q.selectedAnswers[it.key] = 'Sai';
+            btnFalse.classList.add('active');
+            btnTrue.classList.remove('active');
+            showToast(`Câu ${q.num || q.index} - Ý ${it.key}: Đã chọn Sai!`);
+          });
+
+          btnGroup.appendChild(btnTrue);
+          btnGroup.appendChild(btnFalse);
+
+          row.appendChild(stem);
+          row.appendChild(btnGroup);
+          tfContainer.appendChild(row);
+        });
+
+        card.appendChild(tfContainer);
+      } else if (q.options && q.options.length > 0) {
         const optsContainer = document.createElement('div');
         optsContainer.className = 'options-list';
 
@@ -1834,13 +2149,23 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   function formatSingleQuestion(q) {
     let result = `${q.title}\n`;
     if (q.image) result += `[Hình ảnh: ${q.image}]\n`;
-    if (q.options && q.options.length > 0) {
+    if (q.type === 'true_false_group' && q.items && q.items.length > 0) {
+      q.items.forEach(it => {
+        const ans = q.selectedAnswers?.[it.key] ? ` => ${q.selectedAnswers[it.key]}` : '';
+        result += `  ${it.key}. ${it.statement}${ans}\n`;
+      });
+    } else if (q.options && q.options.length > 0) {
       q.options.forEach(opt => {
         result += `  ${opt.key ? opt.key + '.' : '•'} ${opt.text}${opt.isChecked ? ' (Đã chọn)' : ''}\n`;
       });
     }
     if (q.aiSolution) {
-      result += `=> AI Đáp án: ${q.aiSolution.answer} (${q.aiSolution.explanation})\n`;
+      if (q.type === 'true_false_group' && q.aiSolution.answers) {
+        const s = Object.entries(q.aiSolution.answers).map(([k, v]) => `${k}: ${v}`).join(' | ');
+        result += `=> AI Đáp án: ${s} (${q.aiSolution.explanation || ''})\n`;
+      } else if (q.aiSolution.answer) {
+        result += `=> AI Đáp án: ${q.aiSolution.answer} (${q.aiSolution.explanation})\n`;
+      }
     }
     return result;
   }
@@ -1849,14 +2174,24 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     return list.map((q, i) => {
       let md = `### Câu ${q.num || q.index || (i + 1)}: ${q.title}\n`;
       if (q.image) md += `![](${q.image})\n\n`;
-      if (q.options && q.options.length > 0) {
+      if (q.type === 'true_false_group' && q.items && q.items.length > 0) {
+        q.items.forEach(it => {
+          const ans = q.selectedAnswers?.[it.key] ? ` **[${q.selectedAnswers[it.key]}]**` : '';
+          md += `- **${it.key}.** ${it.statement}${ans}\n`;
+        });
+      } else if (q.options && q.options.length > 0) {
         q.options.forEach(opt => {
           const check = (q.selectedAnswer === opt.key || opt.isChecked) ? ' ✅' : '';
           md += `- **${opt.key || '•'}.** ${opt.text}${check}\n`;
         });
       }
       if (q.aiSolution) {
-        md += `\n> **AI Đáp án:** **${q.aiSolution.answer}** - ${q.aiSolution.explanation}\n`;
+        if (q.type === 'true_false_group' && q.aiSolution.answers) {
+          const s = Object.entries(q.aiSolution.answers).map(([k, v]) => `${k}: ${v}`).join(' | ');
+          md += `\n> **AI Đáp án:** **${s}** - ${q.aiSolution.explanation || ''}\n`;
+        } else if (q.aiSolution.answer) {
+          md += `\n> **AI Đáp án:** **${q.aiSolution.answer}** - ${q.aiSolution.explanation}\n`;
+        }
       }
       return md;
     }).join('\n---\n\n');

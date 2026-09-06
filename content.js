@@ -903,6 +903,36 @@
 
     for (const container of qContainers) {
       if (!container) continue;
+
+      // 2.0: Dành riêng cho câu hỏi Đúng / Sai theo từng ý (A_TRUE, A_FALSE, B_TRUE, B_FALSE...)
+      const tfMatch = cleanKey.match(/^([A-D])_(TRUE|FALSE)$/i);
+      if (tfMatch) {
+        const subKey = tfMatch[1].toUpperCase();
+        const wantTrue = tfMatch[2].toUpperCase() === 'TRUE';
+        const tfRows = Array.from(container.querySelectorAll('.yh-tf4-row, .ant-space-item, tr, div')).filter(r => {
+          const inps = r.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+          return inps.length >= 2;
+        });
+
+        for (let rIdx = 0; rIdx < tfRows.length; rIdx++) {
+          const row = tfRows[rIdx];
+          const rowText = cleanText(row.innerText || '');
+          const keyElem = row.querySelector('.yh-tf4-stem__key, .key, b, strong');
+          const keyMatch = rowText.match(/^[A-D][\.\)]/i);
+          const rowKey = keyElem ? (keyElem.innerText || '').replace(/[^A-D]/gi, '').toUpperCase() : (keyMatch ? keyMatch[0].charAt(0).toUpperCase() : String.fromCharCode(65 + rIdx));
+
+          if (rowKey === subKey) {
+            const targetCont = wantTrue
+              ? (row.querySelector('.yh-tf4-true') || Array.from(row.querySelectorAll('label, div')).find(el => /\bđúng\b|\btrue\b/i.test(el.innerText || '')))
+              : (row.querySelector('.yh-tf4-false') || Array.from(row.querySelectorAll('label, div')).find(el => /\bsai\b|\bfalse\b/i.test(el.innerText || '')));
+
+            const inps = row.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+            const targetInp = targetCont ? findRadioInput(targetCont) : (wantTrue ? inps[0] : inps[1]);
+            if (forceClickTarget(targetInp, targetCont || row)) return true;
+          }
+        }
+      }
+
       const inputs = Array.from(container.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
         .filter(inp => !inp.closest('.qtype_multichoice_clearchoice'));
 
@@ -1057,25 +1087,77 @@
       if (qCard) {
         qCard.setAttribute('data-qa-id', qId);
 
-        const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
-        if (inputs.length >= 2) {
-          inputs.forEach((inp, idx) => {
-            const key = String.fromCharCode(65 + idx);
-            inp.setAttribute('data-qa-for', qId);
-            inp.setAttribute('data-qa-opt', key);
-            const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
-            if (wrapper) {
-              wrapper.setAttribute('data-qa-for', qId);
-              wrapper.setAttribute('data-qa-opt', key);
+        // Kiểm tra xem đây có phải dạng câu hỏi Đúng / Sai 4 ý không
+        const yhTfRows = Array.from(qCard.querySelectorAll('.yh-tf4-row'));
+        const isTF = (q.type === 'true_false_group') || yhTfRows.length > 0;
+
+        if (isTF) {
+          let tfRows = yhTfRows;
+          if (tfRows.length === 0) {
+            const candidates = Array.from(qCard.querySelectorAll('.ant-space-item, tr, .form-check-inline, div'));
+            tfRows = candidates.filter(r => {
+              const inps = r.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+              return inps.length === 2 && /đúng|sai|true|false/i.test(r.innerText || '');
+            });
+          }
+
+          tfRows.forEach((row, rIdx) => {
+            let key = String.fromCharCode(65 + rIdx);
+            const keyElem = row.querySelector('.yh-tf4-stem__key, .key, b, strong');
+            if (keyElem) {
+              const m = (keyElem.innerText || '').match(/([A-D])/i);
+              if (m) key = m[1].toUpperCase();
+            }
+
+            // Đúng
+            const trueCont = row.querySelector('.yh-tf4-true') || 
+              Array.from(row.querySelectorAll('label, div, span')).find(el => /\bđúng\b|\btrue\b/i.test(el.innerText || ''));
+            const trueInp = trueCont ? (trueCont.tagName === 'INPUT' ? trueCont : trueCont.querySelector('input')) : row.querySelectorAll('input')[0];
+            if (trueInp) {
+              trueInp.setAttribute('data-qa-for', qId);
+              trueInp.setAttribute('data-qa-opt', `${key}_TRUE`);
+              const wrap = trueInp.closest('label, .ant-radio-wrapper') || trueInp.parentElement;
+              if (wrap) {
+                wrap.setAttribute('data-qa-for', qId);
+                wrap.setAttribute('data-qa-opt', `${key}_TRUE`);
+              }
+            }
+
+            // Sai
+            const falseCont = row.querySelector('.yh-tf4-false') || 
+              Array.from(row.querySelectorAll('label, div, span')).find(el => /\bsai\b|\bfalse\b/i.test(el.innerText || ''));
+            const falseInp = falseCont ? (falseCont.tagName === 'INPUT' ? falseCont : falseCont.querySelector('input')) : row.querySelectorAll('input')[1];
+            if (falseInp) {
+              falseInp.setAttribute('data-qa-for', qId);
+              falseInp.setAttribute('data-qa-opt', `${key}_FALSE`);
+              const wrap = falseInp.closest('label, .ant-radio-wrapper') || falseInp.parentElement;
+              if (wrap) {
+                wrap.setAttribute('data-qa-for', qId);
+                wrap.setAttribute('data-qa-opt', `${key}_FALSE`);
+              }
             }
           });
         } else {
-          const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
-          rows.forEach((row, idx) => {
-            const key = String.fromCharCode(65 + idx);
-            row.setAttribute('data-qa-for', qId);
-            row.setAttribute('data-qa-opt', key);
-          });
+          const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+          if (inputs.length >= 2) {
+            inputs.forEach((inp, idx) => {
+              const key = String.fromCharCode(65 + idx);
+              inp.setAttribute('data-qa-for', qId);
+              inp.setAttribute('data-qa-opt', key);
+              const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
+              if (wrapper) {
+                wrapper.setAttribute('data-qa-for', qId);
+                wrapper.setAttribute('data-qa-opt', key);
+              }
+            });
+          } else {
+            const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
+            rows.forEach((row, idx) => {
+              const key = String.fromCharCode(65 + idx);
+              row.setAttribute('data-qa-for', qId);
+              row.setAttribute('data-qa-opt', key);
+            });
+          }
         }
       }
     });
@@ -1100,30 +1182,46 @@
 Hãy đọc kỹ văn bản đề thi dưới đây và trích xuất TOÀN BỘ các câu hỏi trắc nghiệm thành một mảng JSON hợp lệ.
 
 CÁC NGUYÊN TẮC BẮT BUỘC:
-1. ĐOẠN VĂN ĐỌC HIỂU (Reading passage, Announcement, Đoạn văn điền từ, Dữ liệu chung...):
-   - Nếu có đoạn văn dùng chung cho một nhóm câu (ví dụ: từ câu 13 đến 16, hoặc bài đọc 31-36...), BẮT BUỘC phải trích xuất TOÀN BỘ nội dung bài đọc đó vào trường "passage" của tất cả các câu hỏi thuộc nhóm đó!
-   - Nếu là câu hỏi độc lập bình thường không có bài đọc hiểu, để "passage": null.
-2. BỎ QUA CÁC THÀNH PHẦN RÁC:
-   - Đồng hồ đếm ngược (ví dụ 54:20), bảng danh sách câu hỏi, điểm số (ví dụ Điểm: 0.25), nút nộp bài, thông tin người dùng.
-3. CẤU TRÚC MỖI CÂU HỎI TRONG MẢNG:
-   - "num": số thứ tự câu hỏi (số nguyên, ví dụ 1, 2, 13...)
-   - "title": đề bài câu hỏi (hoặc câu hỏi ngắn, KHÔNG bao gồm bài đọc hiểu chung)
-   - "passage": nội dung đoạn văn đọc hiểu chung (nếu có, hoặc null)
-   - "options": mảng các lựa chọn, mỗi phần tử là {"key": "A"|"B"|"C"|"D", "text": "nội dung đáp án đã bỏ tiền tố A/B/C/D và bỏ điểm số"}
+1. PHÂN BIỆT RÕ 2 DẠNG CÂU HỎI ("type"):
+   - Dạng 1: "single_choice" - Câu trắc nghiệm thông thường (chọn 1 trong 4 đáp án A, B, C, D).
+   - Dạng 2: "true_false_group" - Dạng Đúng / Sai 4 ý (Phần II theo form mới Bộ GD&ĐT), mỗi câu có 4 mệnh đề A, B, C, D (hoặc a, b, c, d) và mỗi mệnh đề có 2 lựa chọn Đúng / Sai.
+
+2. ĐOẠN VĂN ĐỌC HIỂU / ĐOẠN TƯ LIỆU DÙNG CHUNG ("passage"):
+   - Nếu có đoạn văn đọc hiểu, đoạn tư liệu dùng chung cho một nhóm câu (hoặc 1 câu):
+     BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc/tư liệu đó vào trường "passage".
+   - Nếu câu độc lập không có bài đọc hiểu/tư liệu chung, để "passage": null.
+
+3. BỎ QUA CÁC THÀNH PHẦN RÁC:
+   - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số, chữ "Đúng Sai" bị lặp rác, nút nộp bài.
+
+4. CẤU TRÚC JSON MỖI PHẦN TỬ:
+   - Nếu là dạng "single_choice":
+     {
+       "num": 1,
+       "type": "single_choice",
+       "passage": null,
+       "title": "Nội dung câu hỏi...",
+       "options": [
+         { "key": "A", "text": "nội dung đáp án A..." },
+         { "key": "B", "text": "nội dung đáp án B..." }
+       ]
+     }
+   - Nếu là dạng "true_false_group":
+     {
+       "num": 27,
+       "type": "true_false_group",
+       "passage": "nội dung đoạn tư liệu... nếu có hoặc null",
+       "title": "đề bài chung (ví dụ: Cho đoạn tư liệu sau đây:)",
+       "items": [
+         { "key": "A", "statement": "mệnh đề A..." },
+         { "key": "B", "statement": "mệnh đề B..." },
+         { "key": "C", "statement": "mệnh đề C..." },
+         { "key": "D", "statement": "mệnh đề D..." }
+       ]
+     }
 
 ĐỊNH DẠNG ĐẦU RA:
-Chỉ trả về DUY NHẤT một khối JSON hợp lệ dạng:
-[
-  {
-    "num": 1,
-    "passage": null,
-    "title": "Nội dung câu hỏi...",
-    "options": [
-      { "key": "A", "text": "..." },
-      { "key": "B", "text": "..." }
-    ]
-  }
-]
+Chỉ trả về DUY NHẤT một khối JSON hợp lệ dạng mảng [...].
 
 VĂN BẢN ĐỀ THI:
 ${pageText.slice(0, 45000)}`;
@@ -1164,12 +1262,37 @@ ${pageText.slice(0, 45000)}`;
     inPageMapAiQuestions(parsed);
 
     return parsed.map((item, idx) => {
-      let finalTitle = item.title || `Câu hỏi ${item.num || (idx + 1)}`;
-      if (item.passage) {
-        finalTitle = `[ĐỌC HIỂU / READING PASSAGE]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
-      }
       const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
       const qId = `qa-detected-ai-${qNum}`;
+      const isTF = item.type === 'true_false_group' || (item.items && item.items.length > 0);
+
+      let finalTitle = item.title || `Câu hỏi ${qNum}`;
+      if (item.passage) {
+        finalTitle = `[ĐỌC HIỂU / TƯ LIỆU]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
+      }
+
+      if (isTF) {
+        const tfItems = (item.items || []).map((it, itIdx) => {
+          const key = (it.key || String.fromCharCode(65 + itIdx)).toUpperCase();
+          return {
+            key: key,
+            statement: (it.statement || it.text || '').trim()
+          };
+        });
+
+        return {
+          id: qId,
+          num: qNum,
+          index: idx + 1,
+          type: 'true_false_group',
+          title: finalTitle,
+          image: null,
+          items: tfItems,
+          options: [],
+          selectedAnswers: {}
+        };
+      }
+
       const options = (item.options || []).map((o, optIdx) => {
         const key = (o.key || String.fromCharCode(65 + optIdx)).toUpperCase();
         const optText = (o.text || '').trim();
@@ -1185,6 +1308,7 @@ ${pageText.slice(0, 45000)}`;
         id: qId,
         num: qNum,
         index: idx + 1,
+        type: 'single_choice',
         title: finalTitle,
         image: null,
         options: options,
@@ -1272,6 +1396,89 @@ ${pageText.slice(0, 45000)}`;
       let successCount = 0;
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
+
+        // 1. Dạng câu hỏi Đúng / Sai 4 ý (Phần II)
+        if (q.type === 'true_false_group') {
+          if (!q.items || q.items.length === 0) continue;
+          const itemsText = q.items.map(it => `${it.key}. ${it.statement}`).join('\n');
+          const prompt = `Bạn là chuyên gia giải đề thi trắc nghiệm siêu chính xác.
+Dưới đây là câu hỏi dạng ĐÚNG / SAI 4 Ý (Phần II theo form mới Bộ GD&ĐT).
+Hãy đọc kỹ đoạn tư liệu/đề bài và đánh giá từng mệnh đề A, B, C, D là "Đúng" hay "Sai".
+
+ĐỀ BÀI / ĐOẠN TƯ LIỆU:
+${q.title}
+
+CÁC MỆNH ĐỀ:
+${itemsText}
+
+YÊU CẦU:
+Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
+{
+  "answers": {
+    "A": "Đúng" hoặc "Sai",
+    "B": "Đúng" hoặc "Sai",
+    "C": "Đúng" hoặc "Sai",
+    "D": "Đúng" hoặc "Sai"
+  },
+  "explanation": "Giải thích ngắn gọn cho từng ý"
+}`;
+
+          try {
+            let resp = null;
+            if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
+              resp = await new Promise(resolve => {
+                chrome.runtime.sendMessage({
+                  action: 'CALL_KEY4U_AI',
+                  prompt: prompt,
+                  model: model,
+                  apiKey: apiKey
+                }, (res) => {
+                  if (chrome.runtime.lastError) resolve({ success: false });
+                  else resolve(res || { success: false });
+                });
+              });
+            }
+
+            if (!resp || !resp.success) {
+              const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+                body: JSON.stringify({
+                  model: model,
+                  messages: [
+                    { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
+                    { role: 'user', content: prompt }
+                  ],
+                  temperature: 0.1
+                })
+              });
+              if (res.ok) {
+                const data = await res.json();
+                const content = data.choices?.[0]?.message?.content || '';
+                const m = content.match(/\{[\s\S]*?\}/);
+                if (m) resp = { success: true, data: JSON.parse(m[0]) };
+              }
+            }
+
+            if (resp && resp.success && resp.data && resp.data.answers) {
+              const ans = resp.data.answers;
+              for (const subKey of ['A', 'B', 'C', 'D']) {
+                if (ans[subKey]) {
+                  const isTrue = /đúng|true/i.test(ans[subKey]);
+                  const targetKey = isTrue ? `${subKey}_TRUE` : `${subKey}_FALSE`;
+                  autoSelectAnswerOnPage(q.id, targetKey, isTrue ? 'Đúng' : 'Sai');
+                }
+              }
+              successCount++;
+              console.log(`[AutoSolver Stealth] Đã giải câu Đúng/Sai ${q.num || i + 1} (${successCount}/${questions.length})`);
+            }
+          } catch (err) {
+            console.warn('[AutoSolver Stealth] Lỗi khi giải câu ' + (q.num || i + 1), err);
+          }
+          continue;
+        }
+
+        // 2. Dạng trắc nghiệm 1 đáp án A, B, C, D thông thường
         if (!q.options || q.options.length === 0) continue;
 
         const optionsText = q.options.map(o => `${o.key}. ${o.text}`).join('\n');
