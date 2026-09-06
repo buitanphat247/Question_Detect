@@ -392,14 +392,13 @@
 
       if (!title || title.length < 3) title = `Câu hỏi ${qNum}`;
 
-      // Nếu có bài đọc hiểu tương ứng, gắn kèm vào tiêu đề
+      // Nếu có bài đọc hiểu tương ứng, tách riêng vào passage
+      let passageText = null;
       if (passageMap && passageMap.has(qNum)) {
-        const passage = passageMap.get(qNum);
-        let baseTitle = title;
-        if (/^(?:câu|question|quest|q|bài)\s*\d+[\.\:\s]*$/i.test(baseTitle.trim())) {
-          baseTitle = `${baseTitle} (Chọn đáp án đúng nhất cho vị trí (${qNum}) hoặc câu hỏi này dựa trên bài đọc hiểu trên)`;
+        passageText = passageMap.get(qNum);
+        if (/^(?:câu|question|quest|q|bài)\s*\d+[\.\:\s]*$/i.test(title.trim())) {
+          title = `${title} (Chọn đáp án đúng nhất cho vị trí (${qNum}) hoặc câu hỏi này dựa trên bài đọc hiểu trên)`;
         }
-        title = `[ĐỌC HIỂU / READING PASSAGE]:\n${passage}\n\n[NỘI DUNG CÂU HỎI]:\n${baseTitle}`;
       }
 
       const imgSrc = extractImageUrl(qtextEl || box);
@@ -479,6 +478,7 @@
           num: qNum,
           index: idx + 1,
           title: title,
+          passage: passageText,
           image: imgSrc,
           options: options,
           selectedAnswer: options.find(o => o.isChecked)?.key || null
@@ -487,7 +487,7 @@
         // Chống trùng lặp câu hỏi (Deduplication): giữ câu có options đầy đủ nhất hoặc có bài đọc hiểu
         if (questionsMap.has(qNum)) {
           const existing = questionsMap.get(qNum);
-          if (options.length > existing.options.length || (!existing.title.includes('[ĐỌC HIỂU') && title.includes('[ĐỌC HIỂU'))) {
+          if (options.length > existing.options.length || (!existing.passage && passageText)) {
             questionsMap.set(qNum, qObj);
           }
         } else {
@@ -688,14 +688,13 @@
         }
       }
 
-      let finalTitle = q.title;
+      let passageText = null;
       if (passageMap && passageMap.has(q.num)) {
-        const passage = passageMap.get(q.num);
-        let baseTitle = finalTitle;
-        if (/^(?:câu|question|quest|q|bài)\s*\d+[\.\:\s]*$/i.test(baseTitle.trim())) {
-          baseTitle = `${baseTitle} (Chọn đáp án đúng nhất cho vị trí (${q.num}) hoặc câu hỏi này dựa trên bài đọc hiểu trên)`;
-        }
-        finalTitle = `[ĐỌC HIỂU / READING PASSAGE]:\n${passage}\n\n[NỘI DUNG CÂU HỎI]:\n${baseTitle}`;
+        passageText = passageMap.get(q.num);
+      }
+      let finalTitle = q.title;
+      if (passageText && /^(?:câu|question|quest|q|bài)\s*\d+[\.\:\s]*$/i.test(finalTitle.trim())) {
+        finalTitle = `${finalTitle} (Chọn đáp án đúng nhất cho vị trí (${q.num}) hoặc câu hỏi này dựa trên bài đọc hiểu trên)`;
       }
 
       if (options.length > 0 || finalTitle.length > 8 || q.image) {
@@ -703,6 +702,7 @@
           id: q.id,
           num: q.num,
           title: finalTitle,
+          passage: passageText,
           image: q.image,
           options: options.sort((a, b) => a.key.localeCompare(b.key)),
           selectedAnswer: options.find(o => o.isChecked)?.key || null
@@ -710,7 +710,7 @@
 
         if (questionsMap.has(q.num)) {
           const existing = questionsMap.get(q.num);
-          if (options.length > existing.options.length || (!existing.title.includes('[ĐỌC HIỂU') && finalTitle.includes('[ĐỌC HIỂU'))) {
+          if (options.length > existing.options.length || (!existing.passage && passageText)) {
             questionsMap.set(q.num, qObj);
           }
         } else {
@@ -1381,6 +1381,57 @@
     return imageMap;
   }
 
+  // Hàm làm sạch triệt để tiêu đề câu hỏi, tách bài đọc hiểu và loại bỏ trùng lặp
+  function cleanQuestionTitle(rawTitle, passageText, qNum) {
+    if (!rawTitle) return ('Câu hỏi ' + (qNum || '')).trim();
+    let t = String(rawTitle).trim();
+
+    // 1. Tách nếu có nhãn [NỘI DUNG CÂU HỎI]:
+    if (t.includes('[NỘI DUNG CÂU HỎI]:')) {
+      const parts = t.split('[NỘI DUNG CÂU HỎI]:');
+      t = parts[parts.length - 1].trim();
+    }
+
+    // 2. Bỏ prefix nhãn đọc hiểu ở đầu
+    t = t.replace(/^\[(?:ĐỌC HIỂU|TƯ LIỆU|READING PASSAGE)[^\]]*\]\s*:\s*/i, '').trim();
+
+    // 3. Nếu tiêu đề chứa hoặc bắt đầu bằng đoạn văn passage
+    if (passageText && typeof passageText === 'string') {
+      const pTrim = passageText.trim();
+      if (pTrim.length > 15) {
+        if (t.startsWith(pTrim)) {
+          t = t.slice(pTrim.length).trim();
+        } else if (t.includes(pTrim)) {
+          t = t.replace(pTrim, '').trim();
+        } else {
+          const normP = pTrim.replace(/\s+/g, ' ');
+          const normT = t.replace(/\s+/g, ' ');
+          if (normT.startsWith(normP)) {
+            t = normT.slice(normP.length).trim();
+          } else if (normT.includes(normP)) {
+            t = normT.replace(normP, '').trim();
+          }
+        }
+      }
+    }
+
+    // 4. Nếu có tiêu đề nhóm câu dạng "Question 19 - 22: ...\n (a)..."
+    const groupMatch = t.match(/^((?:question|câu)\s*\d+\s*[\-\–]\s*\d+[\.\:\s\-]+[^\n]*)\n+([\s\S]*)$/i);
+    if (groupMatch) {
+      t = groupMatch[2].trim();
+    }
+
+    // 5. Bỏ tiền tố số câu ở đầu (Question 1., Câu 1:)
+    t = t.replace(/^(?:question|câu|câu\s*hỏi|bài|item|q)\s*\d+[\.\:\s\-]+/i, '').trim();
+
+    // 6. Nếu rỗng sau khi xử lý
+    if (!t) {
+      t = rawTitle.includes('(') ? rawTitle : ('Dựa vào bài đọc hiểu/đoạn văn trên để trả lời câu hỏi ' + (qNum || '')).trim();
+    }
+
+    return t;
+  }
+
   // Bóc tách câu hỏi bằng AI trực tiếp trong content script
   async function extractQuestionsWithAI(apiKey, detectModel) {
     const clone = document.body.cloneNode(true);
@@ -1559,34 +1610,20 @@ ${pageText.slice(0, 45000)}`;
       let rawTitle = (item.title || `Câu hỏi ${qNum}`).trim();
       let passageText = (item.passage || '').trim() || null;
 
-      // Tách riêng biệt bài đọc hiểu và câu hỏi, TUYỆT ĐỐI không gộp đoạn văn vào title
+      // Nếu rawTitle có chứa [NỘI DUNG CÂU HỎI]: và passageText rỗng, trích xuất passage từ phần trước
       if (rawTitle.includes('[NỘI DUNG CÂU HỎI]:')) {
         const parts = rawTitle.split('[NỘI DUNG CÂU HỎI]:');
-        const pPart = parts[0].replace(/^\[(?:ĐỌC HIỂU|TƯ LIỆU)[^\]]*\]\s*:\s*/i, '').trim();
+        const pPart = parts[0].replace(/^\[(?:ĐỌC HIỂU|TƯ LIỆU|READING PASSAGE)[^\]]*\]\s*:\s*/i, '').trim();
         if (pPart && !passageText) passageText = pPart;
-        rawTitle = parts[1].trim();
-      } else if (rawTitle.startsWith('[ĐỌC HIỂU') || rawTitle.startsWith('[TƯ LIỆU')) {
-        rawTitle = rawTitle.replace(/^\[(?:ĐỌC HIỂU|TƯ LIỆU)[^\]]*\]\s*:\s*/i, '').trim();
-        if (passageText && rawTitle.startsWith(passageText)) {
-          rawTitle = rawTitle.slice(passageText.length).trim();
-        }
       }
 
-      if (passageText && rawTitle.startsWith(passageText)) {
-        rawTitle = rawTitle.slice(passageText.length).trim();
-      }
-
+      // Tách group header (ví dụ Question 19 - 22: ...) vào passageText nếu chưa có
       const groupMatch = rawTitle.match(/^((?:question|câu)\s*\d+\s*[\-\–]\s*\d+[\.\:\s\-]+[^\n]*)\n+([\s\S]*)$/i);
-      if (groupMatch) {
-        if (!passageText) {
-          passageText = groupMatch[1].trim();
-        }
-        rawTitle = groupMatch[2].trim();
+      if (groupMatch && !passageText) {
+        passageText = groupMatch[1].trim();
       }
 
-      rawTitle = rawTitle.replace(/^(?:question|câu|câu\s*hỏi|bài|item|q)\s*\d+[\.\:\s\-]+/i, '').trim();
-      if (!rawTitle) rawTitle = item.title || `Câu hỏi ${qNum}`;
-      const finalTitle = rawTitle;
+      const finalTitle = cleanQuestionTitle(rawTitle, passageText, qNum);
 
       if (isTF) {
         const tfItems = (item.items || []).map((it, itIdx) => {
