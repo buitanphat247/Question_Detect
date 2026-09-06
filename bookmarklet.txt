@@ -1,1 +1,0 @@
-javascript:fetch('https://raw.githubusercontent.com/buitanphat247/Question_Detect/main/content.js?t='+Date.now()).then(r=>r.text()).then(t=>eval(t));
