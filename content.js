@@ -143,16 +143,27 @@
     if (!elem) return null;
     let img = elem.tagName === 'IMG' ? elem : elem.querySelector('img');
     if (img) {
-      const src = img.getAttribute('data-src') || img.getAttribute('data-original') || img.src;
-      if (src && !src.startsWith('data:image/svg')) {
+      const src = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
+      if (src) {
         const lowerSrc = src.toLowerCase();
-        if (lowerSrc.includes('filtericon') || lowerSrc.includes('monologo') || lowerSrc.includes('icon.php') || lowerSrc.includes('/pix/')) {
+        if (lowerSrc.includes('filtericon') || lowerSrc.includes('monologo') || lowerSrc.includes('icon.php') || lowerSrc.includes('/pix/') || lowerSrc.includes('avatar') || lowerSrc.includes('favicon') || lowerSrc.includes('logo')) {
           return null;
         }
         const rect = img.getBoundingClientRect();
-        if ((rect.width > 35 && rect.height > 35) || (img.naturalWidth > 35 && img.naturalHeight > 35) || !img.complete) {
+        if ((rect.width > 25 && rect.height > 25) || (img.naturalWidth > 25 && img.naturalHeight > 25) || !img.complete) {
           return src;
         }
+      }
+    }
+    const svg = elem.tagName === 'svg' ? elem : elem.querySelector('svg');
+    if (svg) {
+      const rect = svg.getBoundingClientRect();
+      const w = parseInt(svg.getAttribute('width') || '0', 10);
+      const h = parseInt(svg.getAttribute('height') || '0', 10);
+      if ((rect.width > 30 && rect.height > 30) || (w > 30 || h > 30) || svg.getAttribute('viewBox')) {
+        try {
+          return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+        } catch (e) {}
       }
     }
     return null;
@@ -1045,15 +1056,158 @@
   const oldToast = document.getElementById('qa-stealth-toast');
   if (oldToast) oldToast.remove();
 
-  // Liên kết các câu hỏi AI bóc tách vào DOM trên trang web để tự động click chọn được
+  // Liên kết các câu hỏi AI bóc tách vào DOM trên trang web và trích xuất hình ảnh/sơ đồ chuẩn xác
   function inPageMapAiQuestions(parsedQuestions) {
-    if (!parsedQuestions || parsedQuestions.length === 0) return false;
+    if (!parsedQuestions || parsedQuestions.length === 0) return {};
 
     document.querySelectorAll('[data-qa-id], [data-qa-for], [data-qa-opt]').forEach(el => {
       el.removeAttribute('data-qa-id');
       el.removeAttribute('data-qa-for');
       el.removeAttribute('data-qa-opt');
     });
+
+    function isValidImageSrc(src) {
+      if (!src || typeof src !== 'string') return false;
+      const s = src.trim().toLowerCase();
+      if (s.length < 10) return false;
+      if (s.includes('avatar') || s.includes('filtericon') || s.includes('monologo') ||
+          s.includes('icon.php') || s.includes('/pix/') || s.includes('favicon') ||
+          s.includes('emoji') || s.includes('button') || s.includes('radio') ||
+          s.includes('logo') || s.includes('navbar') || s.includes('arrow')) {
+        return false;
+      }
+      return true;
+    }
+
+    function extractImageFromNode(node) {
+      if (!node || !node.querySelectorAll) return null;
+
+      function checkImg(img) {
+        let src = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
+        if (!src || !isValidImageSrc(src)) return null;
+
+        const rect = img.getBoundingClientRect();
+        const nw = img.naturalWidth || 0;
+        const nh = img.naturalHeight || 0;
+        if ((rect.width > 0 && rect.width < 25 && rect.height < 25) || (nw > 0 && nw < 25 && nh < 25)) {
+          return null;
+        }
+
+        if (src.startsWith('blob:')) {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.clientWidth || 300;
+            canvas.height = img.naturalHeight || img.clientHeight || 300;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            return canvas.toDataURL('image/png');
+          } catch (e) {}
+        }
+        return src;
+      }
+
+      if (node.tagName === 'IMG') {
+        const s = checkImg(node);
+        if (s) return s;
+      }
+
+      const imgs = Array.from(node.querySelectorAll('img'));
+      for (const img of imgs) {
+        const s = checkImg(img);
+        if (s) return s;
+      }
+
+      const svgs = Array.from(node.querySelectorAll('svg'));
+      for (const svg of svgs) {
+        const rect = svg.getBoundingClientRect();
+        const w = parseInt(svg.getAttribute('width') || '0', 10);
+        const h = parseInt(svg.getAttribute('height') || '0', 10);
+        if ((rect.width > 30 && rect.height > 30) || (w > 30 || h > 30) || svg.getAttribute('viewBox')) {
+          try {
+            const clone = svg.cloneNode(true);
+            if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+          } catch (e) {}
+        }
+      }
+
+      const canvases = Array.from(node.querySelectorAll('canvas'));
+      for (const cv of canvases) {
+        if (cv.width > 30 && cv.height > 30) {
+          try {
+            return cv.toDataURL('image/png');
+          } catch (e) {}
+        }
+      }
+
+      const bgElements = Array.from(node.querySelectorAll('[style*="background"]'));
+      for (const el of bgElements) {
+        const style = el.getAttribute('style') || '';
+        const bgMatch = style.match(/background(?:-image)?\s*:\s*url\((['"]?)(.*?)\1\)/i);
+        if (bgMatch && isValidImageSrc(bgMatch[2])) {
+          return bgMatch[2];
+        }
+      }
+
+      return null;
+    }
+
+    function findQuestionImage(qCard, allHeaders, qNum) {
+      if (qCard) {
+        const img = extractImageFromNode(qCard);
+        if (img) return img;
+      }
+
+      if (allHeaders && allHeaders.length > 0) {
+        for (const h of allHeaders) {
+          if (h.parentElement) {
+            const imgP = extractImageFromNode(h.parentElement);
+            if (imgP) return imgP;
+          }
+
+          let sib = h.nextElementSibling;
+          let count = 0;
+          while (sib && count < 5) {
+            const sibText = (sib.innerText || sib.textContent || '').trim();
+            const nextQMatch = sibText.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+            if (nextQMatch && parseInt(nextQMatch[1], 10) !== qNum) break;
+
+            const imgSib = extractImageFromNode(sib);
+            if (imgSib) return imgSib;
+            sib = sib.nextElementSibling;
+            count++;
+          }
+
+          let prev = h.previousElementSibling;
+          count = 0;
+          while (prev && count < 3) {
+            const prevText = (prev.innerText || prev.textContent || '').trim();
+            const prevQMatch = prevText.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+            if (prevQMatch && parseInt(prevQMatch[1], 10) !== qNum) break;
+
+            const imgPrev = extractImageFromNode(prev);
+            if (imgPrev) return imgPrev;
+            prev = prev.previousElementSibling;
+            count++;
+          }
+
+          const container = h.closest('.yh-question-card, .que, [class*="question"], [id*="question"], .ant-card, tr, li, fieldset');
+          if (container) {
+            const imgC = extractImageFromNode(container);
+            if (imgC) return imgC;
+          }
+        }
+      }
+
+      if (qCard && qCard.previousElementSibling) {
+        const imgPrevCard = extractImageFromNode(qCard.previousElementSibling);
+        if (imgPrevCard) return imgPrevCard;
+      }
+
+      return null;
+    }
+
+    const imageMap = {};
 
     parsedQuestions.forEach(q => {
       const qNum = q.num;
@@ -1082,6 +1236,11 @@
         if (!qCard && allHeaders[0]) {
           qCard = allHeaders[0].closest('.yh-question-card, .que, .question-card, [id^="q-"], div') || allHeaders[0];
         }
+      }
+
+      const foundImg = findQuestionImage(qCard, allHeaders, qNum);
+      if (foundImg) {
+        imageMap[qNum] = foundImg;
       }
 
       if (qCard) {
@@ -1162,13 +1321,39 @@
       }
     });
 
-    return true;
+    return imageMap;
   }
 
   // Bóc tách câu hỏi bằng AI trực tiếp trong content script
   async function extractQuestionsWithAI(apiKey, detectModel) {
     const clone = document.body.cloneNode(true);
-    clone.querySelectorAll('script, style, noscript, svg, nav, header, footer, iframe, select, textarea, audio, video, aside, .navbar, .sidebar, .menu, [class*="nav"], [class*="sidebar"], [class*="footer"]').forEach(el => el.remove());
+
+    // Đánh dấu ảnh bằng marker văn bản để AI nhận biết có hình ảnh/sơ đồ
+    clone.querySelectorAll('img').forEach(img => {
+      const src = img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
+      if (src && src.length > 10) {
+        const lower = src.toLowerCase();
+        if (!lower.includes('avatar') && !lower.includes('icon.php') && !lower.includes('/pix/') && !lower.includes('favicon') && !lower.includes('logo')) {
+          const marker = document.createTextNode(`\n[HÌNH ẢNH: ${src}]\n`);
+          img.parentNode?.replaceChild(marker, img);
+        }
+      }
+    });
+
+    // Đánh dấu sơ đồ hình học SVG bằng marker văn bản
+    clone.querySelectorAll('svg').forEach(svg => {
+      const rect = svg.getBoundingClientRect();
+      const w = parseInt(svg.getAttribute('width') || '0', 10);
+      const h = parseInt(svg.getAttribute('height') || '0', 10);
+      if ((rect.width > 30 && rect.height > 30) || (w > 30 || h > 30) || svg.getAttribute('viewBox')) {
+        const marker = document.createTextNode('\n[HÌNH ẢNH / SƠ ĐỒ HÌNH HỌC]\n');
+        svg.parentNode?.replaceChild(marker, svg);
+      } else {
+        svg.remove();
+      }
+    });
+
+    clone.querySelectorAll('script, style, noscript, nav, header, footer, iframe, select, textarea, audio, video, aside, .navbar, .sidebar, .menu, [class*="nav"], [class*="sidebar"], [class*="footer"]').forEach(el => el.remove());
     const mainArea = clone.querySelector('main, #main, .main, [role="main"], .quiz-content, .exam-content, .paper-container, .ant-layout-content, #content, .content') || clone;
     const pageText = (mainArea.innerText || mainArea.textContent || '')
       .replace(/\r\n/g, '\n')
@@ -1191,15 +1376,20 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc/tư liệu đó vào trường "passage".
    - Nếu câu độc lập không có bài đọc hiểu/tư liệu chung, để "passage": null.
 
-3. BỎ QUA CÁC THÀNH PHẦN RÁC:
+3. HÌNH ẢNH / SƠ ĐỒ MINH HỌA ("image"):
+   - Nếu trong câu hỏi có xuất hiện [HÌNH ẢNH: url] hoặc link ảnh minh họa, hãy trích xuất link ảnh vào trường "image".
+   - Nếu không có, để "image": null.
+
+4. BỎ QUA CÁC THÀNH PHẦN RÁC:
    - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số, chữ "Đúng Sai" bị lặp rác, nút nộp bài.
 
-4. CẤU TRÚC JSON MỖI PHẦN TỬ:
+5. CẤU TRÚC JSON MỖI PHẦN TỬ:
    - Nếu là dạng "single_choice":
      {
        "num": 1,
        "type": "single_choice",
        "passage": null,
+       "image": "url_ảnh_nếu_có_hoặc_null",
        "title": "Nội dung câu hỏi...",
        "options": [
          { "key": "A", "text": "nội dung đáp án A..." },
@@ -1211,6 +1401,7 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
        "num": 27,
        "type": "true_false_group",
        "passage": "nội dung đoạn tư liệu... nếu có hoặc null",
+       "image": "url_ảnh_nếu_có_hoặc_null",
        "title": "đề bài chung (ví dụ: Cho đoạn tư liệu sau đây:)",
        "items": [
          { "key": "A", "statement": "mệnh đề A..." },
@@ -1259,12 +1450,13 @@ ${pageText.slice(0, 45000)}`;
     }
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
 
-    inPageMapAiQuestions(parsed);
+    const imageMap = inPageMapAiQuestions(parsed) || {};
 
     return parsed.map((item, idx) => {
       const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
       const qId = `qa-detected-ai-${qNum}`;
       const isTF = item.type === 'true_false_group' || (item.items && item.items.length > 0);
+      const detectedImage = imageMap[qNum] || item.image || null;
 
       let finalTitle = item.title || `Câu hỏi ${qNum}`;
       if (item.passage) {
@@ -1286,7 +1478,7 @@ ${pageText.slice(0, 45000)}`;
           index: idx + 1,
           type: 'true_false_group',
           title: finalTitle,
-          image: null,
+          image: detectedImage,
           items: tfItems,
           options: [],
           selectedAnswers: {}
@@ -1310,7 +1502,7 @@ ${pageText.slice(0, 45000)}`;
         index: idx + 1,
         type: 'single_choice',
         title: finalTitle,
-        image: null,
+        image: detectedImage,
         options: options,
         selectedAnswer: null
       };

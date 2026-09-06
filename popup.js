@@ -144,16 +144,27 @@ function inPageExtractQA() {
     if (!elem) return null;
     let img = elem.tagName === 'IMG' ? elem : elem.querySelector('img');
     if (img) {
-      const src = img.getAttribute('data-src') || img.getAttribute('data-original') || img.src;
-      if (src && !src.startsWith('data:image/svg')) {
+      const src = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
+      if (src) {
         const lowerSrc = src.toLowerCase();
-        if (lowerSrc.includes('filtericon') || lowerSrc.includes('monologo') || lowerSrc.includes('icon.php') || lowerSrc.includes('/pix/')) {
+        if (lowerSrc.includes('filtericon') || lowerSrc.includes('monologo') || lowerSrc.includes('icon.php') || lowerSrc.includes('/pix/') || lowerSrc.includes('avatar') || lowerSrc.includes('favicon') || lowerSrc.includes('logo')) {
           return null;
         }
         const rect = img.getBoundingClientRect();
-        if ((rect.width > 35 && rect.height > 35) || (img.naturalWidth > 35 && img.naturalHeight > 35) || !img.complete) {
+        if ((rect.width > 25 && rect.height > 25) || (img.naturalWidth > 25 && img.naturalHeight > 25) || !img.complete) {
           return src;
         }
+      }
+    }
+    const svg = elem.tagName === 'svg' ? elem : elem.querySelector('svg');
+    if (svg) {
+      const rect = svg.getBoundingClientRect();
+      const w = parseInt(svg.getAttribute('width') || '0', 10);
+      const h = parseInt(svg.getAttribute('height') || '0', 10);
+      if ((rect.width > 30 && rect.height > 30) || (w > 30 || h > 30) || svg.getAttribute('viewBox')) {
+        try {
+          return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+        } catch (e) {}
       }
     }
     return null;
@@ -391,7 +402,10 @@ function inPageExtractQA() {
         title = `[ĐỌC HIỂU / READING PASSAGE]:\n${passage}\n\n[NỘI DUNG CÂU HỎI]:\n${baseTitle}`;
       }
 
-      const imgSrc = extractImageUrl(qtextEl || box);
+      let imgSrc = extractImageUrl(qtextEl || box);
+      if (!imgSrc && box) {
+        imgSrc = extractImageUrl(box.parentElement) || extractImageUrl(box.previousElementSibling);
+      }
       const options = [];
       const qId = `qa-detected-quiz-${qNum}`;
       box.setAttribute('data-qa-id', qId);
@@ -1025,7 +1039,33 @@ function inPageHighlightQA(qaId) {
 // Bóc tách nội dung văn bản thuần của đề thi để gửi cho AI phân tích
 function inPageExtractCleanText() {
   const clone = document.body.cloneNode(true);
-  clone.querySelectorAll('script, style, noscript, svg, nav, header, footer, iframe, select, textarea, audio, video, aside, .navbar, .sidebar, .menu, [class*="nav"], [class*="sidebar"], [class*="footer"]').forEach(el => el.remove());
+
+  // Đánh dấu ảnh bằng marker văn bản để AI nhận biết có hình ảnh/sơ đồ
+  clone.querySelectorAll('img').forEach(img => {
+    const src = img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
+    if (src && src.length > 10) {
+      const lower = src.toLowerCase();
+      if (!lower.includes('avatar') && !lower.includes('icon.php') && !lower.includes('/pix/') && !lower.includes('favicon') && !lower.includes('logo')) {
+        const marker = document.createTextNode(`\n[HÌNH ẢNH: ${src}]\n`);
+        img.parentNode?.replaceChild(marker, img);
+      }
+    }
+  });
+
+  // Đánh dấu sơ đồ hình học SVG bằng marker văn bản
+  clone.querySelectorAll('svg').forEach(svg => {
+    const rect = svg.getBoundingClientRect();
+    const w = parseInt(svg.getAttribute('width') || '0', 10);
+    const h = parseInt(svg.getAttribute('height') || '0', 10);
+    if ((rect.width > 30 && rect.height > 30) || (w > 30 || h > 30) || svg.getAttribute('viewBox')) {
+      const marker = document.createTextNode('\n[HÌNH ẢNH / SƠ ĐỒ HÌNH HỌC]\n');
+      svg.parentNode?.replaceChild(marker, svg);
+    } else {
+      svg.remove();
+    }
+  });
+
+  clone.querySelectorAll('script, style, noscript, nav, header, footer, iframe, select, textarea, audio, video, aside, .navbar, .sidebar, .menu, [class*="nav"], [class*="sidebar"], [class*="footer"]').forEach(el => el.remove());
 
   const mainArea = clone.querySelector('main, #main, .main, [role="main"], .quiz-content, .exam-content, .paper-container, .ant-layout-content, #content, .content') || clone;
 
@@ -1036,15 +1076,161 @@ function inPageExtractCleanText() {
     .trim();
 }
 
-// Liên kết các câu hỏi AI bóc tách vào DOM trên trang web để tự động click chọn được
+// Liên kết các câu hỏi AI bóc tách vào DOM trên trang web và trích xuất hình ảnh/sơ đồ chuẩn xác
 function inPageMapAiQuestions(parsedQuestions) {
-  if (!parsedQuestions || parsedQuestions.length === 0) return false;
+  if (!parsedQuestions || parsedQuestions.length === 0) return {};
 
   document.querySelectorAll('[data-qa-id], [data-qa-for], [data-qa-opt]').forEach(el => {
     el.removeAttribute('data-qa-id');
     el.removeAttribute('data-qa-for');
     el.removeAttribute('data-qa-opt');
   });
+
+  function isValidImageSrc(src) {
+    if (!src || typeof src !== 'string') return false;
+    const s = src.trim().toLowerCase();
+    if (s.length < 10) return false;
+    if (s.includes('avatar') || s.includes('filtericon') || s.includes('monologo') ||
+        s.includes('icon.php') || s.includes('/pix/') || s.includes('favicon') ||
+        s.includes('emoji') || s.includes('button') || s.includes('radio') ||
+        s.includes('logo') || s.includes('navbar') || s.includes('arrow')) {
+      return false;
+    }
+    return true;
+  }
+
+  function extractImageFromNode(node) {
+    if (!node || !node.querySelectorAll) return null;
+
+    function checkImg(img) {
+      let src = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
+      if (!src || !isValidImageSrc(src)) return null;
+
+      const rect = img.getBoundingClientRect();
+      const nw = img.naturalWidth || 0;
+      const nh = img.naturalHeight || 0;
+      if ((rect.width > 0 && rect.width < 25 && rect.height < 25) || (nw > 0 && nw < 25 && nh < 25)) {
+        return null;
+      }
+
+      // Xử lý blob URL trong context trang web
+      if (src.startsWith('blob:')) {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.clientWidth || 300;
+          canvas.height = img.naturalHeight || img.clientHeight || 300;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          return canvas.toDataURL('image/png');
+        } catch (e) {}
+      }
+      return src;
+    }
+
+    if (node.tagName === 'IMG') {
+      const s = checkImg(node);
+      if (s) return s;
+    }
+
+    const imgs = Array.from(node.querySelectorAll('img'));
+    for (const img of imgs) {
+      const s = checkImg(img);
+      if (s) return s;
+    }
+
+    const svgs = Array.from(node.querySelectorAll('svg'));
+    for (const svg of svgs) {
+      const rect = svg.getBoundingClientRect();
+      const w = parseInt(svg.getAttribute('width') || '0', 10);
+      const h = parseInt(svg.getAttribute('height') || '0', 10);
+      if ((rect.width > 30 && rect.height > 30) || (w > 30 || h > 30) || svg.getAttribute('viewBox')) {
+        try {
+          const clone = svg.cloneNode(true);
+          if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+          return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+        } catch (e) {}
+      }
+    }
+
+    const canvases = Array.from(node.querySelectorAll('canvas'));
+    for (const cv of canvases) {
+      if (cv.width > 30 && cv.height > 30) {
+        try {
+          return cv.toDataURL('image/png');
+        } catch (e) {}
+      }
+    }
+
+    const bgElements = Array.from(node.querySelectorAll('[style*="background"]'));
+    for (const el of bgElements) {
+      const style = el.getAttribute('style') || '';
+      const bgMatch = style.match(/background(?:-image)?\s*:\s*url\((['"]?)(.*?)\1\)/i);
+      if (bgMatch && isValidImageSrc(bgMatch[2])) {
+        return bgMatch[2];
+      }
+    }
+
+    return null;
+  }
+
+  function findQuestionImage(qCard, allHeaders, qNum) {
+    if (qCard) {
+      const img = extractImageFromNode(qCard);
+      if (img) return img;
+    }
+
+    if (allHeaders && allHeaders.length > 0) {
+      for (const h of allHeaders) {
+        if (h.parentElement) {
+          const imgP = extractImageFromNode(h.parentElement);
+          if (imgP) return imgP;
+        }
+
+        // Kiểm tra anh em đứng sau (next siblings)
+        let sib = h.nextElementSibling;
+        let count = 0;
+        while (sib && count < 5) {
+          const sibText = (sib.innerText || sib.textContent || '').trim();
+          const nextQMatch = sibText.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+          if (nextQMatch && parseInt(nextQMatch[1], 10) !== qNum) break;
+
+          const imgSib = extractImageFromNode(sib);
+          if (imgSib) return imgSib;
+          sib = sib.nextElementSibling;
+          count++;
+        }
+
+        // Kiểm tra anh em đứng trước (previous siblings)
+        let prev = h.previousElementSibling;
+        count = 0;
+        while (prev && count < 3) {
+          const prevText = (prev.innerText || prev.textContent || '').trim();
+          const prevQMatch = prevText.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+          if (prevQMatch && parseInt(prevQMatch[1], 10) !== qNum) break;
+
+          const imgPrev = extractImageFromNode(prev);
+          if (imgPrev) return imgPrev;
+          prev = prev.previousElementSibling;
+          count++;
+        }
+
+        const container = h.closest('.yh-question-card, .que, [class*="question"], [id*="question"], .ant-card, tr, li, fieldset');
+        if (container) {
+          const imgC = extractImageFromNode(container);
+          if (imgC) return imgC;
+        }
+      }
+    }
+
+    if (qCard && qCard.previousElementSibling) {
+      const imgPrevCard = extractImageFromNode(qCard.previousElementSibling);
+      if (imgPrevCard) return imgPrevCard;
+    }
+
+    return null;
+  }
+
+  const imageMap = {};
 
   parsedQuestions.forEach(q => {
     const qNum = q.num;
@@ -1073,6 +1259,12 @@ function inPageMapAiQuestions(parsedQuestions) {
       if (!qCard && allHeaders[0]) {
         qCard = allHeaders[0].closest('.yh-question-card, .que, .question-card, [id^="q-"], div') || allHeaders[0];
       }
+    }
+
+    // Trích xuất ảnh/sơ đồ cho câu hỏi này
+    const foundImg = findQuestionImage(qCard, allHeaders, qNum);
+    if (foundImg) {
+      imageMap[qNum] = foundImg;
     }
 
     if (qCard) {
@@ -1153,7 +1345,7 @@ function inPageMapAiQuestions(parsedQuestions) {
     }
   });
 
-  return true;
+  return imageMap;
 }
 
 // Logic giao diện Popup
@@ -1361,7 +1553,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       showToast(`AI (${detectModel}) đang phân tích cấu trúc đề thi...`);
 
-      const prompt = `Bạn là chuyên gia bóc tách cấu trúc đề thi trắc nghiệm siêu chuẩn xác.
+       const prompt = `Bạn là chuyên gia bóc tách cấu trúc đề thi trắc nghiệm siêu chuẩn xác.
 Hãy đọc kỹ văn bản đề thi dưới đây và trích xuất TOÀN BỘ các câu hỏi trắc nghiệm thành một mảng JSON hợp lệ.
 
 CÁC NGUYÊN TẮC BẮT BUỘC:
@@ -1374,15 +1566,20 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc/tư liệu đó vào trường "passage".
    - Nếu câu độc lập không có bài đọc hiểu/tư liệu chung, để "passage": null.
 
-3. BỎ QUA CÁC THÀNH PHẦN RÁC:
+3. HÌNH ẢNH / SƠ ĐỒ MINH HỌA ("image"):
+   - Nếu trong câu hỏi có xuất hiện [HÌNH ẢNH: url] hoặc link ảnh minh họa, hãy trích xuất link ảnh vào trường "image".
+   - Nếu không có, để "image": null.
+
+4. BỎ QUA CÁC THÀNH PHẦN RÁC:
    - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số, chữ "Đúng Sai" bị lặp rác, nút nộp bài.
 
-4. CẤU TRÚC JSON MỖI PHẦN TỬ:
+5. CẤU TRÚC JSON MỖI PHẦN TỬ:
    - Nếu là dạng "single_choice":
      {
        "num": 1,
        "type": "single_choice",
        "passage": null,
+       "image": "url_ảnh_nếu_có_hoặc_null",
        "title": "Nội dung câu hỏi...",
        "options": [
          { "key": "A", "text": "nội dung đáp án A..." },
@@ -1394,6 +1591,7 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
        "num": 27,
        "type": "true_false_group",
        "passage": "nội dung đoạn tư liệu... nếu có hoặc null",
+       "image": "url_ảnh_nếu_có_hoặc_null",
        "title": "đề bài chung (ví dụ: Cho đoạn tư liệu sau đây:)",
        "items": [
          { "key": "A", "statement": "mệnh đề A..." },
@@ -1440,13 +1638,17 @@ ${pageText.slice(0, 45000)}`;
         throw new Error('AI không tìm thấy cấu trúc câu hỏi nào trong văn bản!');
       }
 
-      // Liên kết các câu hỏi AI bóc tách vào DOM trên trang web để tự động click chọn được
+      // Liên kết các câu hỏi AI bóc tách vào DOM trên trang web và trích xuất hình ảnh tương ứng
+      let imageMap = {};
       try {
-        await chrome.scripting.executeScript({
+        const mapResults = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: inPageMapAiQuestions,
           args: [parsedQuestions]
         });
+        if (mapResults && mapResults[0] && mapResults[0].result) {
+          imageMap = mapResults[0].result;
+        }
       } catch (e) {
         console.warn('Map DOM failed:', e);
       }
@@ -1456,6 +1658,7 @@ ${pageText.slice(0, 45000)}`;
         const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
         const qId = `qa-detected-ai-${qNum}`;
         const isTF = item.type === 'true_false_group' || (item.items && item.items.length > 0);
+        const detectedImage = imageMap[qNum] || item.image || null;
 
         let finalTitle = item.title || `Câu hỏi ${qNum}`;
         if (item.passage) {
@@ -1477,7 +1680,7 @@ ${pageText.slice(0, 45000)}`;
             index: idx + 1,
             type: 'true_false_group',
             title: finalTitle,
-            image: null,
+            image: detectedImage,
             items: tfItems,
             options: [],
             selectedAnswers: {},
@@ -1502,7 +1705,7 @@ ${pageText.slice(0, 45000)}`;
           index: idx + 1,
           type: 'single_choice',
           title: finalTitle,
-          image: null,
+          image: detectedImage,
           options: options,
           selectedAnswer: null,
           aiSolution: null
@@ -1526,6 +1729,8 @@ ${pageText.slice(0, 45000)}`;
     const apiKey = txtApiKey.value.trim() || DEFAULT_API_KEY;
     const model = txtModel.value.trim() || DEFAULT_MODEL;
 
+    const imgNote = q.image ? (q.image.startsWith('data:') ? '\n(LƯU Ý: Câu hỏi có hình vẽ / sơ đồ minh họa đi kèm)' : `\n(LƯU Ý: Câu hỏi có hình ảnh minh họa đi kèm: ${q.image})`) : '';
+
     // 1. Dạng câu hỏi Đúng / Sai 4 ý (Phần II)
     if (q.type === 'true_false_group') {
       const itemsText = (q.items || []).map(it => `${it.key}. ${it.statement}`).join('\n');
@@ -1534,7 +1739,7 @@ Dưới đây là câu hỏi dạng ĐÚNG / SAI 4 Ý (Phần II theo form mới
 Hãy đọc kỹ đoạn tư liệu/đề bài và đánh giá từng mệnh đề A, B, C, D là "Đúng" hay "Sai".
 
 ĐỀ BÀI / ĐOẠN TƯ LIỆU:
-${q.title}
+${q.title}${imgNote}
 
 CÁC MỆNH ĐỀ:
 ${itemsText}
@@ -1593,7 +1798,7 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
 Hãy đọc câu hỏi và các phương án lựa chọn dưới đây, sau đó tìm ra ĐÁP ÁN ĐÚNG NHẤT.
 
 CÂU HỎI:
-${q.title}
+${q.title}${imgNote}
 
 CÁC LỰA CHỌN:
 ${optionsText}
@@ -2040,8 +2245,17 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         const img = document.createElement('img');
         img.src = q.image;
         img.className = 'q-image-preview';
-        img.title = 'Nhấp để xem ảnh lớn';
-        img.addEventListener('click', () => window.open(q.image, '_blank'));
+        img.title = 'Nhấp để phóng to ảnh';
+        img.addEventListener('click', () => {
+          if (q.image.startsWith('data:')) {
+            const w = window.open('');
+            if (w) {
+              w.document.write(`<title>Ảnh Câu ${q.num || ''}</title><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;height:100vh;"><img src="${q.image}" style="max-width:95vw;max-height:95vh;object-fit:contain;box-shadow:0 0 25px rgba(0,0,0,0.8);border-radius:8px;background:#fff;padding:8px;"></body>`);
+            }
+          } else {
+            window.open(q.image, '_blank');
+          }
+        });
         imgContainer.appendChild(img);
         card.appendChild(imgContainer);
       }
