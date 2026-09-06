@@ -10,6 +10,16 @@ if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" set "CHRO
 if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set "CHROME_PATH=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
 if "%CHROME_PATH%"=="" set "CHROME_PATH=chrome.exe"
 
-:: Khởi động Chrome nạp sẵn Extension ngay lập tức (không cần cài đặt thủ công)
-start "" "%CHROME_PATH%" --load-extension="%EXT_DIR%" --user-data-dir="%TEMP%\chrome_exam_data" "https://utexlms.hcmute.edu.vn"
+:: Kiểm tra nếu Chrome đang chạy ngầm thì đóng để nạp extension
+tasklist /FI "IMAGENAME eq chrome.exe" 2>NUL | find /I /N "chrome.exe">NUL
+if "%ERRORLEVEL%"=="0" (
+    echo ========================================================
+    echo   Chrome đang chạy! Đang khởi động lại để nạp tiện ích...
+    echo ========================================================
+    taskkill /F /IM chrome.exe >nul 2>&1
+    timeout /t 1 /nobreak >nul
+)
+
+:: Mở lại Chrome với Extension đã nạp sẵn và khôi phục các tab làm việc
+start "" "%CHROME_PATH%" --load-extension="%EXT_DIR%" --restore-last-session "https://utexlms.hcmute.edu.vn"
 exit
