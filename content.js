@@ -944,6 +944,96 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     });
   }
 
+  // ==========================================
+  // TỰ ĐỘNG CHUYỂN TRANG KHÔNG RELOAD (GIỮ SCRIPT & ALT+H VĨNH VIỄN)
+  // ==========================================
+  function attachMoodleAjaxNavigation() {
+    if (window._qaAjaxNavigationAttached) return;
+    window._qaAjaxNavigationAttached = true;
+
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('input[type="submit"][name="next"], input[type="submit"][name="previous"], .mod_quiz-next-nav, .mod_quiz-prev-nav, a.page-link, .qnbutton');
+      if (!btn) return;
+
+      const form = document.getElementById('responseform');
+      if (!form) return;
+
+      // Click vào số câu hỏi trên Bảng câu hỏi (thẻ <a>)
+      if (btn.tagName === 'A' && btn.href && !btn.href.startsWith('javascript:')) {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const formData = new FormData(form);
+          await fetch(form.action || window.location.href, { method: 'POST', body: formData });
+          const res = await fetch(btn.href);
+          const html = await res.text();
+          applyNewPageContent(html, btn.href);
+        } catch (err) {
+          window.location.href = btn.href;
+        }
+        return;
+      }
+
+      // Bấm nút "Trang tiếp" hoặc "Trang trước"
+      if (btn.type === 'submit' || btn.tagName === 'INPUT' || btn.tagName === 'BUTTON') {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const formData = new FormData(form);
+        if (btn.name && btn.value) {
+          formData.append(btn.name, btn.value);
+        }
+
+        try {
+          const targetUrl = form.action || window.location.href;
+          const res = await fetch(targetUrl, {
+            method: 'POST',
+            body: formData
+          });
+          const html = await res.text();
+          applyNewPageContent(html, res.url || targetUrl);
+        } catch (err) {
+          form.submit();
+        }
+      }
+    }, true);
+  }
+
+  function applyNewPageContent(html, newUrl) {
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      if (doc.title) document.title = doc.title;
+      if (newUrl) {
+        try { window.history.pushState(null, '', newUrl); } catch (e) {}
+      }
+
+      const oldMain = document.querySelector('#region-main, [role="main"], #page-content, .que');
+      const newMain = doc.querySelector('#region-main, [role="main"], #page-content, .que');
+      if (oldMain && newMain) {
+        oldMain.innerHTML = newMain.innerHTML;
+      }
+
+      const oldNav = document.querySelector('#mod_quiz_navblock, .qn_buttons');
+      const newNav = doc.querySelector('#mod_quiz_navblock, .qn_buttons');
+      if (oldNav && newNav) {
+        oldNav.innerHTML = newNav.innerHTML;
+      }
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      // Giải và chọn đáp án câu mới ngay lập tức
+      setTimeout(() => {
+        triggerAutoSolveFromPage();
+      }, 350);
+    } catch (e) {
+      console.warn('[AutoSolver] Lỗi khi nạp trang mới:', e);
+      window.location.reload();
+    }
+  }
+
   console.log('%c[Q&A AutoSolver] Sẵn sàng! Nhấn Alt + H trên trang để tự động giải & chọn đáp án.', 'color: #10b981; font-weight: bold;');
+  attachMoodleAjaxNavigation();
   triggerAutoSolveFromPage();
 })();
