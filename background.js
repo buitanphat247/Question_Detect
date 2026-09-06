@@ -77,12 +77,73 @@ chrome.commands.onCommand.addListener(async (command) => {
       console.warn('Lỗi phím tắt Alt+H:', err.message);
     }
   } else if (command === 'capture-and-solve') {
-    handleCaptureAndSolve();
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id) {
+        chrome.tabs.sendMessage(tab.id, { action: 'START_STEALTH_SNIP' }, async () => {
+          if (chrome.runtime.lastError) {
+            try {
+              await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['content.js']
+              });
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tab.id, { action: 'START_STEALTH_SNIP' }, () => {});
+              }, 100);
+            } catch (e) {}
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('Lỗi phím tắt Alt+Y:', err.message);
+    }
   }
 });
 
+// Hàm cắt ảnh chụp màn hình theo toạ độ kéo thả của người dùng
+async function cropScreenshot(dataUrl, rect) {
+  if (!rect || !rect.width || !rect.height) return dataUrl;
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const fullBitmap = await createImageBitmap(blob);
+    const fullWidth = fullBitmap.width;
+    const fullHeight = fullBitmap.height;
+
+    const safeX = Math.max(0, Math.min(rect.x, fullWidth - 1));
+    const safeY = Math.max(0, Math.min(rect.y, fullHeight - 1));
+    const safeWidth = Math.min(rect.width, fullWidth - safeX);
+    const safeHeight = Math.min(rect.height, fullHeight - safeY);
+
+    if (safeWidth <= 0 || safeHeight <= 0) {
+      fullBitmap.close();
+      return dataUrl;
+    }
+
+    const offscreen = new OffscreenCanvas(safeWidth, safeHeight);
+    const ctx = offscreen.getContext('2d');
+    ctx.drawImage(fullBitmap, safeX, safeY, safeWidth, safeHeight, 0, 0, safeWidth, safeHeight);
+    fullBitmap.close();
+
+    const croppedBlob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+    const arrayBuffer = await croppedBlob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    const base64 = btoa(binary);
+    return `data:image/jpeg;base64,${base64}`;
+  } catch (err) {
+    console.warn('[CaptureSolver] Lỗi cắt ảnh, fallback sang ảnh gốc:', err);
+    return dataUrl;
+  }
+}
+
 let isCapturingProcess = false;
-async function handleCaptureAndSolve(targetTabId) {
+async function handleCaptureAndSolve(targetTabId, cropRect) {
   if (isCapturingProcess) return;
   isCapturingProcess = true;
 
@@ -107,8 +168,8 @@ async function handleCaptureAndSolve(targetTabId) {
     }
 
     // 1. Chụp ảnh màn hình vùng nhìn thấy của tab hiện tại
-    const screenshotUrl = await new Promise((resolve) => {
-      chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 85 }, (dataUrl) => {
+    let screenshotUrl = await new Promise((resolve) => {
+      chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 90 }, (dataUrl) => {
         if (chrome.runtime.lastError || !dataUrl) {
           resolve(null);
         } else {
@@ -122,7 +183,12 @@ async function handleCaptureAndSolve(targetTabId) {
       return;
     }
 
-    // 2. Lấy API Key & Model từ storage (mặc định gpt-5.5 hỗ trợ Vision cực đỉnh)
+    // 2. Nếu có toạ độ kéo thả crop, tiến hành cắt đúng vùng người dùng chọn
+    if (cropRect && cropRect.width >= 10 && cropRect.height >= 10) {
+      screenshotUrl = await cropScreenshot(screenshotUrl, cropRect);
+    }
+
+    // 3. Lấy API Key & Model từ storage (mặc định gpt-5.5 hỗ trợ Vision cực đỉnh)
     let apiKey = DEFAULT_API_KEY;
     let model = 'gpt-5.5';
     try {
@@ -133,18 +199,18 @@ async function handleCaptureAndSolve(targetTabId) {
       if (stored?.key4uModel) model = stored.key4uModel;
     } catch (e) {}
 
-    // 3. Xây dựng prompt giải đề chuyên sâu từ ảnh chụp màn hình
+    // 4. Xây dựng prompt giải đề chuyên sâu từ ảnh chụp màn hình / vùng chọn
     const prompt = `Bạn là chuyên gia giải đề thi trắc nghiệm siêu chuẩn xác.
-Dưới đây là ẢNH CHỤP MÀN HÌNH bài thi đang hiển thị trực tiếp trên màn hình của học sinh/sinh viên.
+Dưới đây là ẢNH BÀI THI / VÙNG CHỌN CÂU HỎI mà thí sinh đang làm trên màn hình.
 
-HÃY QUAN SÁT THẬT KỸ TOÀN BỘ CÂU HỎI VÀ ĐÁP ÁN TRÊN ẢNH ĐỂ TÌM ĐÁP ÁN ĐÚNG:
-1. Xác định tất cả các câu hỏi đang nhìn thấy được trên màn hình.
+HÃY QUAN SÁT THẬT KỸ CÂU HỎI VÀ CÁC ĐÁP ÁN TRONG ẢNH ĐỂ TÌM ĐÁP ÁN ĐÚNG:
+1. Xác định câu hỏi và các lựa chọn đáp án trong ảnh.
 2. Với mỗi câu hỏi:
-   - "num": Số thứ tự của câu (ví dụ 1, 2, 27...).
+   - "num": Số thứ tự của câu (ví dụ 1, 2, 27...). Nếu không thấy số câu, hãy để là 1.
    - "type": "single_choice" (nếu chọn 1 đáp án A, B, C, D) hoặc "true_false_group" (nếu là dạng Đúng/Sai 4 ý A, B, C, D).
    - "answer": Chữ cái đáp án đúng nhất (ví dụ: "A", "B", "C" hoặc "D").
-   - "answers": Nếu là câu Đúng/Sai, trả về: { "A": "Đúng" hoặc "Sai", "B": "Đúng" hoặc "Sai", "C": "Đúng" hoặc "Sai", "D": "Đúng" hoặc "Sai" }
-   - "optionText": Trích một đoạn chữ ngắn (10-30 ký tự) của phương án đúng đó (ví dụ "Có anode và cathode...", "Không có cực tính", "that", ...) để hệ thống đối chiếu click chuẩn 100%.
+   - "answers": Nếu là câu Đúng/Sai 4 ý, trả về: { "A": "Đúng" hoặc "Sai", "B": "Đúng" hoặc "Sai", "C": "Đúng" hoặc "Sai", "D": "Đúng" hoặc "Sai" }
+   - "optionText": Trích một đoạn ngắn nội dung chữ (10-30 ký tự) của phương án đúng đó (ví dụ "that", "Không có cực tính", "9 , 7 , 5 , 2", ...) để hệ thống đối chiếu click chuẩn 100%.
 
 YÊU CẦU ĐẦU RA BẮT BUỘC:
 Chỉ trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
@@ -160,7 +226,7 @@ Chỉ trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
   ]
 }`;
 
-    // 4. Gọi Vision AI giải bài
+    // 5. Gọi Vision AI giải bài
     const aiResult = await solveWithKey4U(prompt, model, apiKey, screenshotUrl);
 
     let items = [];
@@ -179,7 +245,7 @@ Chỉ trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
       return;
     }
 
-    // 5. Gửi danh sách đáp án sang content script để lập tức click chọn trực tiếp trên trang
+    // 6. Gửi danh sách đáp án sang content script để lập tức click chọn trực tiếp trên trang
     chrome.tabs.sendMessage(tabId, {
       action: 'APPLY_CAPTURE_SOLVE_RESULTS',
       data: items
@@ -213,8 +279,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(res => sendResponse({ success: true, data: res }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // Giữ kết nối async
+  } else if (request.action === 'TRIGGER_CROP_CAPTURE_SOLVE') {
+    handleCaptureAndSolve(sender?.tab?.id, request.rect);
+    sendResponse({ success: true });
+    return true;
   } else if (request.action === 'TRIGGER_CAPTURE_SOLVE') {
-    handleCaptureAndSolve(sender?.tab?.id);
+    handleCaptureAndSolve(sender?.tab?.id, null);
     sendResponse({ success: true });
     return true;
   }

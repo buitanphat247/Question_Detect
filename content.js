@@ -2113,7 +2113,68 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     }
   }
 
-  // Tự động tích chọn đáp án từ kết quả chụp màn hình Vision AI
+  function selectInCard(card, answerKey, optionText) {
+    if (!card) return false;
+
+    // A. Dạng Đúng/Sai (ví dụ targetKey: "A_TRUE", "A_FALSE"...)
+    const tfMatch = (answerKey || '').match(/^([A-D])_(TRUE|FALSE)$/i);
+    if (tfMatch) {
+      const subKey = tfMatch[1].toUpperCase();
+      const wantTrue = tfMatch[2].toUpperCase() === 'TRUE';
+      let tfRows = Array.from(card.querySelectorAll('.yh-tf4-row'));
+      if (tfRows.length === 0) {
+        tfRows = Array.from(card.querySelectorAll('.ant-space-item, tr')).filter(r => r.querySelectorAll('input[type="radio"], input[type="checkbox"]').length === 2);
+      }
+      const rowIdx = subKey.charCodeAt(0) - 65;
+      const targetRow = tfRows[rowIdx];
+      if (targetRow) {
+        const radios = Array.from(targetRow.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+        if (radios.length === 2) {
+          const targetRadio = wantTrue ? radios[0] : radios[1];
+          return forceClickTarget(targetRadio, targetRadio.parentElement);
+        }
+      }
+    }
+
+    // B. Dạng trắc nghiệm 1 đáp án (A, B, C, D)
+    const inputs = Array.from(card.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+      .filter(inp => !inp.closest('.qtype_multichoice_clearchoice'));
+
+    // B1: Khớp theo nội dung chữ của đáp án
+    if (optionText) {
+      const cleanTextLower = optionText.toLowerCase();
+      for (const inp of inputs) {
+        const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
+        const rowTxt = (row?.innerText || '').toLowerCase();
+        if (rowTxt.includes(cleanTextLower)) {
+          return forceClickTarget(inp, row);
+        }
+      }
+    }
+
+    // B2: Khớp theo nhãn A, B, C, D
+    if (answerKey) {
+      for (const inp of inputs) {
+        const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
+        const rowTxt = (row?.innerText || '').trim();
+        const matchKey = rowTxt.match(/(?:^|\s)([A-Da-d])[\.\)\:]/);
+        if (matchKey && matchKey[1].toUpperCase() === answerKey) {
+          return forceClickTarget(inp, row);
+        }
+      }
+
+      // B3: Khớp theo vị trí A=0, B=1, C=2, D=3
+      const kIdx = answerKey.charCodeAt(0) - 65;
+      if (inputs[kIdx]) {
+        const row = inputs[kIdx].closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inputs[kIdx].parentElement;
+        return forceClickTarget(inputs[kIdx], row);
+      }
+    }
+
+    return false;
+  }
+
+  // Tự động tích chọn đáp án từ kết quả chụp màn hình / vùng crop của Vision AI
   function applyCaptureSolveResults(items) {
     if (!items || !Array.isArray(items) || items.length === 0) return;
 
@@ -2126,9 +2187,18 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         for (const [subKey, val] of Object.entries(item.answers)) {
           const isTrue = /đúng|true/i.test(String(val));
           const targetKey = `${subKey.toUpperCase()}_${isTrue ? 'TRUE' : 'FALSE'}`;
-          autoSelectAnswerOnPage(`qa-detected-quiz-${qNum}`, targetKey, isTrue ? 'Đúng' : 'Sai') ||
-          autoSelectAnswerOnPage(`qa-detected-ai-${qNum}`, targetKey, isTrue ? 'Đúng' : 'Sai') ||
-          autoSelectAnswerOnPage(null, targetKey, isTrue ? 'Đúng' : 'Sai');
+
+          let selected = false;
+          // Ưu tiên 0: Click trực tiếp vào câu hỏi vừa được khoanh chọn
+          if (window.__qaLastSnippedCard && document.body.contains(window.__qaLastSnippedCard)) {
+            selected = selectInCard(window.__qaLastSnippedCard, targetKey, isTrue ? 'Đúng' : 'Sai');
+          }
+
+          if (!selected) {
+            autoSelectAnswerOnPage(`qa-detected-quiz-${qNum}`, targetKey, isTrue ? 'Đúng' : 'Sai') ||
+            autoSelectAnswerOnPage(`qa-detected-ai-${qNum}`, targetKey, isTrue ? 'Đúng' : 'Sai') ||
+            autoSelectAnswerOnPage(null, targetKey, isTrue ? 'Đúng' : 'Sai');
+          }
         }
         return;
       }
@@ -2138,65 +2208,34 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       const optionText = (item.optionText || '').trim();
       if (!answerKey && !optionText) return;
 
-      // Tìm container câu hỏi tương ứng trên trang
-      let qCard = document.querySelector(`[data-qa-id="qa-detected-quiz-${qNum}"], [data-qa-id="qa-detected-ai-${qNum}"]`);
-      if (!qCard) {
-        const allCards = Array.from(document.querySelectorAll('.que, .yh-question-card, [class*="question-card"], [id^="q-"]'));
-        for (const card of allCards) {
-          const numElem = card.querySelector(
-            '.yh-question-stem__label, .qno, .no, .info .no, .info .header, .info h3, ' +
-            '[class*="question-num"], [class*="q-num"], .question-number, h3, h4, h5'
-          ) || card;
-          const numTxt = (numElem.innerText || numElem.textContent || '').trim();
-          const m = numTxt.match(/(?:question|câu|câu\s*hỏi|quest|q|bài)\s*(\d+)\b/i);
-          if (m && parseInt(m[1], 10) === qNum) {
-            qCard = card;
-            break;
-          }
-        }
+      let selected = false;
+
+      // Ưu tiên 0: Click trực tiếp vào câu hỏi vừa được khoanh cắt
+      if (window.__qaLastSnippedCard && document.body.contains(window.__qaLastSnippedCard)) {
+        selected = selectInCard(window.__qaLastSnippedCard, answerKey, optionText);
       }
 
-      let selected = false;
-      if (qCard) {
-        const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
-          .filter(inp => !inp.closest('.qtype_multichoice_clearchoice'));
-
-        // Ưu tiên 1: Khớp theo nội dung text của đáp án
-        if (optionText) {
-          const cleanTextLower = optionText.toLowerCase();
-          for (const inp of inputs) {
-            const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
-            const rowTxt = (row?.innerText || '').toLowerCase();
-            if (rowTxt.includes(cleanTextLower)) {
-              forceClickTarget(inp, row);
-              selected = true;
+      // Ưu tiên 1: Tìm container câu hỏi tương ứng trên trang theo số câu
+      if (!selected) {
+        let qCard = document.querySelector(`[data-qa-id="qa-detected-quiz-${qNum}"], [data-qa-id="qa-detected-ai-${qNum}"]`);
+        if (!qCard) {
+          const allCards = Array.from(document.querySelectorAll('.que, .yh-question-card, [class*="question-card"], [id^="q-"]'));
+          for (const card of allCards) {
+            const numElem = card.querySelector(
+              '.yh-question-stem__label, .qno, .no, .info .no, .info .header, .info h3, ' +
+              '[class*="question-num"], [class*="q-num"], .question-number, h3, h4, h5'
+            ) || card;
+            const numTxt = (numElem.innerText || numElem.textContent || '').trim();
+            const m = numTxt.match(/(?:question|câu|câu\s*hỏi|quest|q|bài)\s*(\d+)\b/i);
+            if (m && parseInt(m[1], 10) === qNum) {
+              qCard = card;
               break;
             }
           }
         }
 
-        // Ưu tiên 2: Khớp theo nhãn A, B, C, D
-        if (!selected && answerKey) {
-          for (const inp of inputs) {
-            const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
-            const rowTxt = (row?.innerText || '').trim();
-            const matchKey = rowTxt.match(/(?:^|\s)([A-Da-d])[\.\)\:]/);
-            if (matchKey && matchKey[1].toUpperCase() === answerKey) {
-              forceClickTarget(inp, row);
-              selected = true;
-              break;
-            }
-          }
-        }
-
-        // Ưu tiên 3: Khớp theo thứ tự vị trí A=0, B=1, C=2, D=3
-        if (!selected && answerKey) {
-          const kIdx = answerKey.charCodeAt(0) - 65;
-          if (inputs[kIdx]) {
-            const row = inputs[kIdx].closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inputs[kIdx].parentElement;
-            forceClickTarget(inputs[kIdx], row);
-            selected = true;
-          }
+        if (qCard) {
+          selected = selectInCard(qCard, answerKey, optionText);
         }
       }
 
@@ -2207,6 +2246,168 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         autoSelectAnswerOnPage(null, answerKey, optionText);
       }
     });
+  }
+
+  // ==========================================
+  // CHẾ ĐỘ KÉO THẢ VÙNG CHỌN ĐỂ CẮT TÀNG HÌNH (ALT + Y)
+  // Chỉ đổi con trỏ chuột sang crosshair, ESC để hủy, không hiển thị gì khác
+  // ==========================================
+  let isSnippingActive = false;
+  let snipOverlay = null;
+
+  function stopStealthSnipping() {
+    isSnippingActive = false;
+    if (snipOverlay) {
+      try { snipOverlay.remove(); } catch (e) {}
+      snipOverlay = null;
+    }
+    try {
+      document.documentElement.style.removeProperty('cursor');
+      if (document.body) document.body.style.removeProperty('cursor');
+    } catch (e) {}
+  }
+
+  function startStealthSnipping() {
+    if (isSnippingActive) {
+      stopStealthSnipping();
+      return;
+    }
+
+    isSnippingActive = true;
+
+    // Đổi hình dáng con trỏ chuột sang chữ thập (crosshair)
+    try {
+      document.documentElement.style.setProperty('cursor', 'crosshair', 'important');
+      if (document.body) document.body.style.setProperty('cursor', 'crosshair', 'important');
+    } catch (e) {}
+
+    // Tạo overlay trong suốt 100% để đón nhận thao tác kéo thả chuột mà không lộ bất kỳ UI nào
+    snipOverlay = document.createElement('div');
+    snipOverlay.id = '__qa_stealth_snip_overlay';
+    snipOverlay.style.cssText = `
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 2147483647 !important;
+      background: transparent !important;
+      cursor: crosshair !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+      outline: none !important;
+      border: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      pointer-events: auto !important;
+    `;
+
+    let isMouseDown = false;
+    let startX = 0;
+    let startY = 0;
+
+    const onKeyDown = (e) => {
+      // Phím ESC hủy ngay lập tức
+      if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
+        cleanup();
+        return;
+      }
+      // Bấm lại Alt+Y cũng hủy
+      if (e.altKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY')) {
+        e.preventDefault();
+        e.stopPropagation();
+        cleanup();
+        return;
+      }
+    };
+
+    const onMouseDown = (e) => {
+      if (e.button !== 0) {
+        cleanup();
+        return;
+      }
+      isMouseDown = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const onMouseMove = (e) => {
+      if (!isMouseDown) return;
+      // TUYỆT ĐỐI KHÔNG vẽ bất kỳ khung hay viền nào để không lộ
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const onMouseUp = (e) => {
+      if (!isMouseDown) {
+        cleanup();
+        return;
+      }
+      isMouseDown = false;
+      const endX = e.clientX;
+      const endY = e.clientY;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const minX = Math.min(startX, endX);
+      const maxX = Math.max(startX, endX);
+      const minY = Math.min(startY, endY);
+      const maxY = Math.max(startY, endY);
+
+      const width = maxX - minX;
+      const height = maxY - minY;
+
+      cleanup();
+
+      if (width < 10 || height < 10) {
+        return;
+      }
+
+      // Lưu lại câu hỏi nằm dưới vùng vừa kéo chọn
+      try {
+        const centerEl = document.elementFromPoint(minX + width / 2, minY + height / 2);
+        window.__qaLastSnippedCard = centerEl ? centerEl.closest('.que, .yh-question-card, [class*="question-card"], [data-qa-id], [id^="question-"], [id^="q-"], tr, li, div') : null;
+      } catch (err) {
+        window.__qaLastSnippedCard = null;
+      }
+
+      // Chuyển đổi toạ độ theo tỉ lệ màn hình (devicePixelRatio)
+      const dpr = window.devicePixelRatio || 1;
+      const cropRect = {
+        x: Math.round(minX * dpr),
+        y: Math.round(minY * dpr),
+        width: Math.round(width * dpr),
+        height: Math.round(height * dpr)
+      };
+
+      if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({
+          action: 'TRIGGER_CROP_CAPTURE_SOLVE',
+          rect: cropRect
+        });
+      }
+    };
+
+    function cleanup() {
+      window.removeEventListener('keydown', onKeyDown, true);
+      if (snipOverlay) {
+        snipOverlay.removeEventListener('mousedown', onMouseDown, true);
+        snipOverlay.removeEventListener('mousemove', onMouseMove, true);
+        snipOverlay.removeEventListener('mouseup', onMouseUp, true);
+      }
+      stopStealthSnipping();
+    }
+
+    window.addEventListener('keydown', onKeyDown, true);
+    snipOverlay.addEventListener('mousedown', onMouseDown, true);
+    snipOverlay.addEventListener('mousemove', onMouseMove, true);
+    snipOverlay.addEventListener('mouseup', onMouseUp, true);
+
+    (document.fullscreenElement || document.body || document.documentElement).appendChild(snipOverlay);
   }
 
   // Bắt phím tắt Alt + H hoặc Alt + Y trực tiếp trên trang khi làm bài
@@ -2223,9 +2424,7 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     if (isAltY) {
       e.preventDefault();
       e.stopPropagation();
-      if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
-        chrome.runtime.sendMessage({ action: 'TRIGGER_CAPTURE_SOLVE' });
-      }
+      startStealthSnipping();
       return;
     }
   }, true);
@@ -2244,6 +2443,9 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         sendResponse({ success: ok });
       } else if (request.action === 'TRIGGER_AUTO_SOLVE') {
         triggerAutoSolveFromPage();
+        sendResponse({ success: true });
+      } else if (request.action === 'START_STEALTH_SNIP') {
+        startStealthSnipping();
         sendResponse({ success: true });
       } else if (request.action === 'APPLY_CAPTURE_SOLVE_RESULTS') {
         applyCaptureSolveResults(request.data);
