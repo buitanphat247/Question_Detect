@@ -951,14 +951,15 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     if (window._qaAjaxNavigationAttached) return;
     window._qaAjaxNavigationAttached = true;
 
+    // Bắt sự kiện click vào bất kỳ nút điều hướng trang nào của đề thi
     document.addEventListener('click', async (e) => {
-      const btn = e.target.closest('input[type="submit"][name="next"], input[type="submit"][name="previous"], .mod_quiz-next-nav, .mod_quiz-prev-nav, a.page-link, .qnbutton');
+      const btn = e.target.closest('input[type="submit"], button[type="submit"], .mod_quiz-next-nav, .mod_quiz-prev-nav, a.page-link, .qnbutton, #mod_quiz_navblock a');
       if (!btn) return;
 
-      const form = document.getElementById('responseform');
+      const form = document.querySelector('form#responseform, form[action*="attempt.php"], form.mform') || document.forms[0];
       if (!form) return;
 
-      // Click vào số câu hỏi trên Bảng câu hỏi (thẻ <a>)
+      // 1. Click vào số câu hỏi trên Bảng câu hỏi (thẻ <a>)
       if (btn.tagName === 'A' && btn.href && !btn.href.startsWith('javascript:')) {
         e.preventDefault();
         e.stopPropagation();
@@ -974,14 +975,17 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         return;
       }
 
-      // Bấm nút "Trang tiếp" hoặc "Trang trước"
-      if (btn.type === 'submit' || btn.tagName === 'INPUT' || btn.tagName === 'BUTTON') {
+      // 2. Click vào nút "Trang tiếp", "Trang trước", "Làm xong"
+      const btnText = (btn.value || btn.innerText || btn.textContent || '').toLowerCase();
+      const isNavBtn = btn.name === 'next' || btn.name === 'previous' || btn.classList.contains('mod_quiz-next-nav') || btn.classList.contains('mod_quiz-prev-nav') || btnText.includes('trang tiếp') || btnText.includes('trang trước') || btnText.includes('next') || btnText.includes('previous');
+
+      if (isNavBtn) {
         e.preventDefault();
         e.stopPropagation();
 
         const formData = new FormData(form);
-        if (btn.name && btn.value) {
-          formData.append(btn.name, btn.value);
+        if (btn.name) {
+          formData.append(btn.name, btn.value || '1');
         }
 
         try {
@@ -1009,24 +1013,26 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         try { window.history.pushState(null, '', newUrl); } catch (e) {}
       }
 
-      const oldMain = document.querySelector('#region-main, [role="main"], #page-content, .que');
-      const newMain = doc.querySelector('#region-main, [role="main"], #page-content, .que');
+      // Thay thế nội dung form và câu hỏi mới
+      const oldMain = document.querySelector('#region-main, [role="main"], #page-content, form#responseform, .que');
+      const newMain = doc.querySelector('#region-main, [role="main"], #page-content, form#responseform, .que');
       if (oldMain && newMain) {
         oldMain.innerHTML = newMain.innerHTML;
       }
 
-      const oldNav = document.querySelector('#mod_quiz_navblock, .qn_buttons');
-      const newNav = doc.querySelector('#mod_quiz_navblock, .qn_buttons');
+      // Cập nhật Bảng câu hỏi bên phải
+      const oldNav = document.querySelector('#mod_quiz_navblock, .qn_buttons, [data-region="blocks-column"]');
+      const newNav = doc.querySelector('#mod_quiz_navblock, .qn_buttons, [data-region="blocks-column"]');
       if (oldNav && newNav) {
         oldNav.innerHTML = newNav.innerHTML;
       }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
-      // Giải và chọn đáp án câu mới ngay lập tức
+      // Tự động quét và chọn đáp án câu mới ngay lập tức
       setTimeout(() => {
         triggerAutoSolveFromPage();
-      }, 350);
+      }, 300);
     } catch (e) {
       console.warn('[AutoSolver] Lỗi khi nạp trang mới:', e);
       window.location.reload();
