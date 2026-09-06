@@ -891,14 +891,6 @@
 
     if (!input && !label && !wrapperEl) return false;
 
-    // Cuộn nhẹ tới câu hỏi nếu cần
-    const scrollTarget = label || input || wrapperEl;
-    if (scrollTarget && typeof scrollTarget.scrollIntoView === 'function') {
-      try {
-        scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } catch (e) {}
-    }
-
     // Kích hoạt click cả input và label để ăn 100% trên mọi nền tảng (Moodle, Azota, Canvas, YourHomework...)
     if (input && typeof input.click === 'function') {
       try {
@@ -2247,6 +2239,5 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     }
   }
 
-  console.log('%c[Q&A AutoSolver] Sẵn sàng! Nhấn Alt + H trên trang để tự động giải & chọn đáp án.', 'color: #10b981; font-weight: bold;');
   attachMoodleAjaxNavigation();
 })();
