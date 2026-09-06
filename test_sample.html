@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trang web kiểm thử phát hiện Câu hỏi & Đáp án (Q&A Test Page)</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    body {
+      background: #f1f5f9;
+      color: #334155;
+      padding: 40px 20px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+    }
+    h1 {
+      color: #1e293b;
+      margin-bottom: 8px;
+      font-size: 24px;
+    }
+    .intro {
+      color: #64748b;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: 14px;
+    }
+    .demo-section {
+      margin-bottom: 30px;
+      padding: 16px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+    }
+    .demo-section h2 {
+      font-size: 16px;
+      color: #4338ca;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    /* Các cấu trúc câu hỏi khác nhau - không hề dùng ID hoặc Label có chủ đích */
+    .random-box-1 {
+      margin-bottom: 15px;
+    }
+    .random-opt {
+      margin-left: 20px;
+      margin-top: 4px;
+    }
+    .option-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    img.demo-img {
+      max-width: 250px;
+      border-radius: 6px;
+      margin: 10px 0;
+      display: block;
+    }
+    table.demo-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    table.demo-table td {
+      border: 1px solid #cbd5e1;
+      padding: 8px 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Trang kiểm thử bóc tách Câu hỏi & Đáp án</h1>
+    <p class="intro">Trang này mô phỏng các website thực tế với nhiều cách viết và cấu trúc HTML hỗn loạn (không hề có class hoặc ID chuẩn câu hỏi). Tiện ích Extension sẽ duyệt từ trên xuống dưới để phát hiện chính xác.</p>
+
+    <!-- Dạng 1: Viết thuần có tiền tố "Câu 1:", "A.", "B.", "C.", "D." -->
+    <div class="demo-section">
+      <h2>Dạng 1: Định dạng trắc nghiệm phổ biến</h2>
+      <div class="random-box-1">
+        <p><strong>Câu 1:</strong> Thủ đô của Việt Nam là thành phố nào sau đây?</p>
+        <div class="random-opt">A. Thành phố Hồ Chí Minh</div>
+        <div class="random-opt">B. Hà Nội</div>
+        <div class="random-opt">C. Đà Nẵng</div>
+        <div class="random-opt">D. Hải Phòng</div>
+      </div>
+
+      <div class="random-box-1">
+        <p><strong>Câu 2:</strong> Ngôn ngữ lập trình nào chạy trực tiếp trên trình duyệt web của người dùng?</p>
+        <div class="random-opt">A. Python</div>
+        <div class="random-opt">B. C++</div>
+        <div class="random-opt">C. JavaScript</div>
+        <div class="random-opt">D. Java</div>
+      </div>
+    </div>
+
+    <!-- Dạng 2: Số thứ tự dạng "1.", "2)", "3:" -->
+    <div class="demo-section">
+      <h2>Dạng 2: Đánh số thứ tự 1., 2)</h2>
+      <div class="random-box-1">
+        <p>1. Trong hệ Mặt Trời, hành tinh nào nằm gần Mặt Trời nhất?</p>
+        <div class="random-opt">A) Sao Kim</div>
+        <div class="random-opt">B) Sao Thủy</div>
+        <div class="random-opt">C) Sao Hỏa</div>
+        <div class="random-opt">D) Sao Mộc</div>
+      </div>
+
+      <div class="random-box-1">
+        <p>2) Đơn vị đo cường độ dòng điện trong hệ SI là gì?</p>
+        <div class="random-opt">[A] Volt (V)</div>
+        <div class="random-opt">[B] Ohm (Ω)</div>
+        <div class="random-opt">[C] Ampere (A)</div>
+        <div class="random-opt">[D] Watt (W)</div>
+      </div>
+    </div>
+
+    <!-- Dạng 3: Dùng Form Radio/Checkbox không có nhãn label hay id -->
+    <div class="demo-section">
+      <h2>Dạng 3: Form Radio không dùng ID/Label</h2>
+      <div class="random-box-1">
+        <p><strong>Question 3:</strong> Which of the following is a CSS framework?</p>
+        <div class="option-row">
+          <input type="radio" name="q3" value="1">
+          <span>React</span>
+        </div>
+        <div class="option-row">
+          <input type="radio" name="q3" value="2" checked>
+          <span>Tailwind CSS</span>
+        </div>
+        <div class="option-row">
+          <input type="radio" name="q3" value="3">
+          <span>Express</span>
+        </div>
+        <div class="option-row">
+          <input type="radio" name="q3" value="4">
+          <span>Django</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dạng 4: Thẻ danh sách ul/li -->
+    <div class="demo-section">
+      <h2>Dạng 4: Dạng danh sách List ul / li</h2>
+      <div class="random-box-1">
+        <p><strong>Bài 4:</strong> Cho tam giác ABC vuông tại A có AB = 3cm, AC = 4cm. Độ dài cạnh huyền BC là bao nhiêu?</p>
+        <ul style="margin-left: 20px; margin-top: 8px;">
+          <li>A. 5cm</li>
+          <li>B. 6cm</li>
+          <li>C. 7cm</li>
+          <li>D. 8cm</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Dạng 5: Câu hỏi kết thúc bằng dấu ? và có hình ảnh -->
+    <div class="demo-section">
+      <h2>Dạng 5: Câu hỏi có hình ảnh minh họa</h2>
+      <div class="random-box-1">
+        <p><strong>Câu 5:</strong> Biển báo giao thông dưới đây mang ý nghĩa cảnh báo điều gì?</p>
+        <!-- SVG hình biển báo tam giác vàng -->
+        <img class="demo-img" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 200 100'><polygon points='100,10 190,90 10,90' style='fill:%23fbbf24;stroke:%23000;stroke-width:4'/><text x='100' y='65' font-size='26' font-weight='bold' text-anchor='middle' fill='%23000'>!</text></svg>" alt="Biển báo giao thông">
+        <div class="random-opt">A. Đoạn đường nguy hiểm</div>
+        <div class="random-opt">B. Cấm đi ngược chiều</div>
+        <div class="random-opt">C. Giao nhau với đường sắt</div>
+        <div class="random-opt">D. Nơi đỗ xe</div>
+      </div>
+    </div>
+
+    <!-- Dạng 6: Bảng Table -->
+    <div class="demo-section">
+      <h2>Dạng 6: Cấu trúc bảng Table</h2>
+      <table class="demo-table">
+        <tr>
+          <td colspan="2"><strong>Câu 6:</strong> Nguyên tố hóa học nào có ký hiệu là "Au"?</td>
+        </tr>
+        <tr>
+          <td>A. Bạc</td>
+          <td>B. Vàng</td>
+        </tr>
+        <tr>
+          <td>C. Đồng</td>
+          <td>D. Sắt</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
