@@ -401,7 +401,21 @@
         }
       }
 
-      const imgSrc = extractImageUrl(qtextEl || box);
+      let imgSrc = extractImageUrl(qtextEl || box);
+      if (!imgSrc) {
+        const allMedia = Array.from(document.querySelectorAll('img, svg, canvas, .yh-player-media, .yh-player-media--section, [class*="player-media"], [class*="section-media"]'));
+        const preceding = allMedia.filter(el => !box.contains(el) && (el.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING));
+        for (let i = preceding.length - 1; i >= 0; i--) {
+          const el = preceding[i];
+          const otherBox = el.closest(containerSelectors.join(', '));
+          if (otherBox && otherBox !== box) continue;
+          const candidate = extractImageUrl(el);
+          if (candidate) {
+            imgSrc = candidate;
+            break;
+          }
+        }
+      }
       const options = [];
       const qId = `qa-detected-quiz-${qNum}`;
       box.setAttribute('data-qa-id', qId);
@@ -1167,108 +1181,135 @@
       return null;
     }
 
-    function findQuestionImage(qCard, allHeaders, qNum) {
-      if (qCard) {
-        const img = extractImageFromNode(qCard);
-        if (img) return img;
-      }
-
-      if (allHeaders && allHeaders.length > 0) {
-        for (const h of allHeaders) {
-          if (h.parentElement) {
-            const imgP = extractImageFromNode(h.parentElement);
-            if (imgP) return imgP;
-          }
-
-          // Kiểm tra anh em đứng sau (next siblings)
-          let sib = h.nextElementSibling;
-          let count = 0;
-          while (sib && count < 5) {
-            const sibText = (sib.innerText || sib.textContent || '').trim();
-            const nextQMatch = sibText.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
-            if (nextQMatch && parseInt(nextQMatch[1], 10) !== qNum) break;
-
-            const imgSib = extractImageFromNode(sib);
-            if (imgSib) return imgSib;
-            sib = sib.nextElementSibling;
-            count++;
-          }
-
-          // Kiểm tra anh em đứng trước (previous siblings)
-          let prev = h.previousElementSibling;
-          count = 0;
-          while (prev && count < 3) {
-            const prevText = (prev.innerText || prev.textContent || '').trim();
-            const prevQMatch = prevText.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
-            if (prevQMatch && parseInt(prevQMatch[1], 10) !== qNum) break;
-
-            const imgPrev = extractImageFromNode(prev);
-            if (imgPrev) return imgPrev;
-            prev = prev.previousElementSibling;
-            count++;
-          }
-
-          const container = h.closest('.yh-question-card, .que, [class*="question"], [id*="question"], .ant-card, tr, li, fieldset');
-          if (container) {
-            const imgC = extractImageFromNode(container);
-            if (imgC) return imgC;
-          }
-        }
-      }
-
-      // Kiểm tra cấu trúc phân cấp: Thẻ anh em trước của qCard và các cấp cha (ancestors)
-      if (qCard) {
-        // 1. Anh em đứng trước trực tiếp của qCard
-        let prevSib = qCard.previousElementSibling;
-        let count = 0;
-        while (prevSib && count < 3) {
-          const imgPrev = extractImageFromNode(prevSib);
-          if (imgPrev) return imgPrev;
-          prevSib = prevSib.previousElementSibling;
-          count++;
-        }
-
-        // 2. Duyệt ngược lên các cấp cha (ancestors) để tìm Section Media (.yh-player-media, tranh ảnh/biển báo đi kèm)
-        let ancestor = qCard.parentElement;
-        let depth = 0;
-        while (ancestor && ancestor !== document.body && depth < 5) {
-          let ancSib = ancestor.previousElementSibling;
-          let sibCount = 0;
-          while (ancSib && sibCount < 3) {
-            const sectionMedia = ancSib.querySelector('.yh-player-media, .yh-player-media--section, [class*="media"]');
-            if (sectionMedia) {
-              const imgSm = extractImageFromNode(sectionMedia);
-              if (imgSm) return imgSm;
-            }
-            const imgAnc = extractImageFromNode(ancSib);
-            if (imgAnc) return imgAnc;
-            ancSib = ancSib.previousElementSibling;
-            sibCount++;
-          }
-
-          const mediaNodes = Array.from(ancestor.querySelectorAll('.yh-player-media, .yh-player-media--section, img'));
-          for (const mn of mediaNodes) {
-            if (mn !== qCard && !qCard.contains(mn)) {
-              if (mn.compareDocumentPosition(qCard) & Node.DOCUMENT_POSITION_FOLLOWING) {
-                const imgMn = extractImageFromNode(mn);
-                if (imgMn) return imgMn;
-              }
+    function convertTableToMarkdown(tbl) {
+      try {
+        const rows = Array.from(tbl.querySelectorAll('tr'));
+        if (rows.length === 0) return null;
+        const mdRows = [];
+        let maxCols = 0;
+        rows.forEach((tr, rIdx) => {
+          const cells = Array.from(tr.querySelectorAll('th, td')).map(td => {
+            return (td.innerText || td.textContent || '').replace(/[\r\n\t]+/g, ' ').trim();
+          });
+          if (cells.length > 0) {
+            if (cells.length > maxCols) maxCols = cells.length;
+            mdRows.push(`| ${cells.join(' | ')} |`);
+            if (rIdx === 0) {
+              mdRows.push(`| ${cells.map(() => '---').join(' | ')} |`);
             }
           }
-
-          ancestor = ancestor.parentElement;
-          depth++;
+        });
+        if (mdRows.length > 0) {
+          return `[BẢNG THÔNG TIN / DỮ LIỆU]:\n${mdRows.join('\n')}`;
         }
-      }
-
+      } catch (e) {}
       return null;
     }
 
+    // Quét tìm hình ảnh, sơ đồ, bảng biểu dạng ảnh hoặc bảng dữ liệu HTML (tìm trong câu hoặc truy ngược lên trên tìm cái gần nhất)
+    function findQuestionMedia(qCard, allHeaders, qNum) {
+      let foundImg = null;
+      let foundTable = null;
+
+      const targetNode = qCard || (allHeaders && allHeaders[0]) || null;
+      if (!targetNode) return { image: null, table: null };
+
+      // 1. Kiểm tra trực tiếp bên trong câu hỏi (targetNode hoặc qCard)
+      foundImg = extractImageFromNode(targetNode);
+      if (!foundImg && qCard && qCard !== targetNode) {
+        foundImg = extractImageFromNode(qCard);
+      }
+
+      const insideTable = targetNode.querySelector('table') || (qCard ? qCard.querySelector('table') : null);
+      if (insideTable) {
+        foundTable = convertTableToMarkdown(insideTable);
+      }
+
+      // 2. Quét ngược lên trên tìm hình ảnh / sơ đồ / bảng biểu dạng ảnh gần nhất đứng trước câu hỏi
+      if (!foundImg) {
+        const allMediaElements = Array.from(document.querySelectorAll(
+          'img, svg, canvas, .yh-player-media, .yh-player-media--section, [class*="player-media"], [class*="section-media"], [class*="image-wrap"]'
+        ));
+
+        // Lọc các phần tử media nằm TRƯỚC targetNode trong DOM
+        const precedingMedia = allMediaElements.filter(el => {
+          if (targetNode.contains(el)) return false;
+          try {
+            return (el.compareDocumentPosition(targetNode) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+          } catch (e) {
+            return false;
+          }
+        });
+
+        // Duyệt ngược từ cuối (phần tử gần nhất) lên trên đầu trang
+        for (let i = precedingMedia.length - 1; i >= 0; i--) {
+          const el = precedingMedia[i];
+
+          // Bỏ qua nếu đây là hình ảnh nội bộ nằm trong card câu hỏi khác
+          const otherQCard = el.closest('.yh-question-card, .que, [class*="question-card"], [id^="q-"]');
+          if (otherQCard && otherQCard !== targetNode) {
+            continue;
+          }
+
+          const imgCandidate = extractImageFromNode(el);
+          if (imgCandidate) {
+            foundImg = imgCandidate;
+            break; // ĐÃ TÌM THẤY MEDIA/BẢNG BIỂU GẦN NHẤT ĐỨNG TRƯỚC CÂU HỎI!
+          }
+        }
+      }
+
+      // 3. Quét ngược lên trên tìm bảng <table> HTML gần nhất nếu đề bài nhắc tới bảng/số liệu
+      if (!foundTable) {
+        const qText = (targetNode.innerText || targetNode.textContent || '').toLowerCase();
+        const refersToTable = /bảng|table|số liệu|dữ liệu|thông tin trong bảng/i.test(qText);
+        if (refersToTable) {
+          const allTables = Array.from(document.querySelectorAll('table'));
+          const precedingTables = allTables.filter(tbl => {
+            if (targetNode.contains(tbl)) return false;
+            try {
+              return (tbl.compareDocumentPosition(targetNode) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+            } catch (e) {
+              return false;
+            }
+          });
+
+          for (let i = precedingTables.length - 1; i >= 0; i--) {
+            const tbl = precedingTables[i];
+            const otherQCard = tbl.closest('.yh-question-card, .que, [class*="question-card"], [id^="q-"]');
+            if (otherQCard && otherQCard !== targetNode) continue;
+
+            const md = convertTableToMarkdown(tbl);
+            if (md) {
+              foundTable = md;
+              break; // ĐÃ TÌM THẤY TABLE HTML GẦN NHẤT ĐỨNG TRƯỚC CÂU HỎI!
+            }
+          }
+        }
+      }
+
+      return { image: foundImg, table: foundTable };
+    }
+
     const imageMap = {};
+    const tableMap = {};
 
     parsedQuestions.forEach(q => {
       const qNum = q.num;
       const qId = `qa-detected-ai-${qNum}`;
+
+      // Ưu tiên 1: Tìm chính xác question card theo nhãn số câu hỏi
+      let qCard = null;
+      const questionCards = Array.from(document.querySelectorAll('.yh-question-card, .que, [class*="question-card"], [id^="q-"]'));
+      for (const card of questionCards) {
+        const stem = card.querySelector('.yh-question-stem__label, .yh-question-stem, .qtext, [class*="stem"], h1, h2, h3, h4, h5, b, strong') || card;
+        const stemTxt = (stem.innerText || stem.textContent || '').trim();
+        const m = stemTxt.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+        if (m && parseInt(m[1], 10) === qNum) {
+          qCard = card;
+          break;
+        }
+      }
 
       const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, div, p, span, b, strong')).filter(el => {
         const txt = (el.innerText || el.textContent || '').trim();
@@ -1277,8 +1318,7 @@
         return m && parseInt(m[1], 10) === qNum;
       });
 
-      let qCard = null;
-      if (allHeaders.length > 0) {
+      if (!qCard && allHeaders.length > 0) {
         for (const h of allHeaders) {
           let curr = h;
           while (curr && curr !== document.body) {
@@ -1295,9 +1335,13 @@
         }
       }
 
-      const foundImg = findQuestionImage(qCard, allHeaders, qNum);
-      if (foundImg) {
-        imageMap[qNum] = foundImg;
+      // Trích xuất ảnh/bảng biểu dạng ảnh hoặc bảng HTML cho câu hỏi này
+      const media = findQuestionMedia(qCard, allHeaders, qNum);
+      if (media.image) {
+        imageMap[qNum] = media.image;
+      }
+      if (media.table) {
+        tableMap[qNum] = media.table;
       }
 
       if (qCard) {
@@ -1378,7 +1422,7 @@
       }
     });
 
-    return imageMap;
+    return { imageMap, tableMap };
   }
 
   // Hàm làm sạch triệt để tiêu đề câu hỏi, tách bài đọc hiểu và loại bỏ trùng lặp
@@ -1476,9 +1520,9 @@
       if (src && src.length > 10) {
         const lower = src.toLowerCase();
         if (!lower.includes('avatar') && !lower.includes('icon.php') && !lower.includes('/pix/') && !lower.includes('favicon') && !lower.includes('logo')) {
-          const isSectionMedia = !!img.closest('.yh-player-media, .yh-player-media--section, [class*="section-media"], [class*="player-media"]');
+          const isSectionMedia = !!img.closest('.yh-player-media, .yh-player-media--section, [class*="section-media"], [class*="player-media"], [class*="image-wrap"]');
           const markerText = isSectionMedia
-            ? `\n[HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO CHO CÂU HỎI TIẾP THEO: ${src}]\n`
+            ? `\n[HÌNH ẢNH / BẢNG BIỂU / SƠ ĐỒ / BIỂN BÁO CHO CÂU HỎI TIẾP THEO: ${src}]\n`
             : `\n[HÌNH ẢNH: ${src}]\n`;
           const marker = document.createTextNode(markerText);
           img.parentNode?.replaceChild(marker, img);
@@ -1523,11 +1567,12 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc, tư liệu hoặc bảng số liệu đó vào trường "passage" của tất cả các câu hỏi thuộc phần đọc hiểu đó.
    - Nếu câu độc lập không có bài đọc/tư liệu/bảng số liệu riêng, để "passage": null.
 
-3. HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO / SƠ ĐỒ ("image"):
-   - CỰC KỲ QUAN TRỌNG: Các câu hỏi dạng nhìn hình nhận xét, đọc hiểu biển báo/thông báo/tranh ảnh (ví dụ: 'Read the following notice...', 'What does the notice/sign say?', 'Quan sát hình vẽ sau...', 'Dựa vào sơ đồ...'):
-     Nếu có [HÌNH ẢNH: url] hoặc [HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO CHO CÂU HỎI TIẾP THEO: url] nằm ngay TRƯỚC câu hỏi hoặc trong câu hỏi, BẮT BUỘC phải trích xuất link ảnh đó và gán vào trường "image" của câu hỏi đó (hoặc tất cả các câu hỏi cùng hỏi về hình ảnh này)!
-   - TUYỆT ĐỐI KHÔNG ĐƯỢC để "image": null khi đề bài có hình ảnh/biển báo/thông báo minh họa tương ứng!
-   - Nếu không có hình ảnh minh họa, để "image": null.
+3. HÌNH ẢNH / BẢNG BIỂU DẠNG ẢNH / BIỂN BÁO / SƠ ĐỒ ("image"):
+   - CỰC KỲ QUAN TRỌNG: Các câu hỏi có hình ảnh minh họa, BẢNG BIỂU DẠNG ẢNH, bảng số liệu, sơ đồ, biểu đồ, biển báo hoặc thông báo (ví dụ: 'Cho những thông tin trong bảng sau đây...', 'Dựa vào bảng số liệu sau...', 'Read the following notice/table/sign...', 'Quan sát hình vẽ sau...', 'Dựa vào sơ đồ...'):
+     Nếu có [HÌNH ẢNH: url] hoặc [HÌNH ẢNH / BẢNG BIỂU / SƠ ĐỒ / BIỂN BÁO CHO CÂU HỎI TIẾP THEO: url] nằm ngay TRƯỚC câu hỏi hoặc trong câu hỏi:
+     BẮT BUỘC PHẢI TRÍCH XUẤT LINK ẢNH ĐÓ VÀ GÁN VÀO TRƯỜNG "image" CỦA CÂU HỎI ĐÓ (hoặc tất cả các câu hỏi cùng tham chiếu đến bảng/ảnh này)!
+   - TUYỆT ĐỐI KHÔNG ĐƯỢC để "image": null khi đề bài có hình ảnh/bảng biểu/biển báo minh họa tương ứng!
+   - Nếu hoàn toàn không có hình ảnh hoặc bảng biểu minh họa, để "image": null.
 
 4. BỎ QUA CÁC THÀNH PHẦN RÁC:
    - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số (ví dụ: '(Điểm: 0.25)'), chữ "Đúng Sai" bị lặp rác, nút nộp bài, các nút thu nhỏ/phóng to hình ("− 100% + Đặt lại").
@@ -1599,7 +1644,9 @@ ${pageText.slice(0, 45000)}`;
     }
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
 
-    const imageMap = inPageMapAiQuestions(parsed) || {};
+    const resMap = inPageMapAiQuestions(parsed) || {};
+    const imageMap = resMap.imageMap || resMap;
+    const tableMap = resMap.tableMap || {};
 
     return parsed.map((item, idx) => {
       const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
@@ -1609,6 +1656,10 @@ ${pageText.slice(0, 45000)}`;
 
       let rawTitle = (item.title || `Câu hỏi ${qNum}`).trim();
       let passageText = (item.passage || '').trim() || null;
+
+      if (!passageText && tableMap[qNum]) {
+        passageText = tableMap[qNum];
+      }
 
       // Nếu rawTitle có chứa [NỘI DUNG CÂU HỎI]: và passageText rỗng, trích xuất passage từ phần trước
       if (rawTitle.includes('[NỘI DUNG CÂU HỎI]:')) {
