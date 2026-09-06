@@ -1009,11 +1009,189 @@
   }
 
   const DEFAULT_API_KEY = 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
-  const DEFAULT_MODEL = 'gpt-5.5';
+  const DEFAULT_MODEL = 'gpt-5.4-nano';
 
   // Dọn sạch toast cũ nếu còn tồn tại
   const oldToast = document.getElementById('qa-stealth-toast');
   if (oldToast) oldToast.remove();
+
+  // Liên kết các câu hỏi AI bóc tách vào DOM trên trang web để tự động click chọn được
+  function inPageMapAiQuestions(parsedQuestions) {
+    if (!parsedQuestions || parsedQuestions.length === 0) return false;
+
+    document.querySelectorAll('[data-qa-id], [data-qa-for], [data-qa-opt]').forEach(el => {
+      el.removeAttribute('data-qa-id');
+      el.removeAttribute('data-qa-for');
+      el.removeAttribute('data-qa-opt');
+    });
+
+    parsedQuestions.forEach(q => {
+      const qNum = q.num;
+      const qId = `qa-detected-ai-${qNum}`;
+
+      const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, div, p, span, b, strong')).filter(el => {
+        const txt = (el.innerText || el.textContent || '').trim();
+        if (txt.length > 300) return false;
+        const m = txt.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+        return m && parseInt(m[1], 10) === qNum;
+      });
+
+      let qCard = null;
+      if (allHeaders.length > 0) {
+        for (const h of allHeaders) {
+          let curr = h;
+          while (curr && curr !== document.body) {
+            if (curr.querySelectorAll('input[type="radio"], input[type="checkbox"]').length >= 2) {
+              qCard = curr;
+              break;
+            }
+            curr = curr.parentElement;
+          }
+          if (qCard) break;
+        }
+        if (!qCard && allHeaders[0]) {
+          qCard = allHeaders[0].closest('.yh-question-card, .que, .question-card, [id^="q-"], div') || allHeaders[0];
+        }
+      }
+
+      if (qCard) {
+        qCard.setAttribute('data-qa-id', qId);
+
+        const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+        if (inputs.length >= 2) {
+          inputs.forEach((inp, idx) => {
+            const key = String.fromCharCode(65 + idx);
+            inp.setAttribute('data-qa-for', qId);
+            inp.setAttribute('data-qa-opt', key);
+            const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
+            if (wrapper) {
+              wrapper.setAttribute('data-qa-for', qId);
+              wrapper.setAttribute('data-qa-opt', key);
+            }
+          });
+        } else {
+          const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
+          rows.forEach((row, idx) => {
+            const key = String.fromCharCode(65 + idx);
+            row.setAttribute('data-qa-for', qId);
+            row.setAttribute('data-qa-opt', key);
+          });
+        }
+      }
+    });
+
+    return true;
+  }
+
+  // Bóc tách câu hỏi bằng AI trực tiếp trong content script
+  async function extractQuestionsWithAI(apiKey, detectModel) {
+    const clone = document.body.cloneNode(true);
+    clone.querySelectorAll('script, style, noscript, svg, nav, header, footer, iframe, select, textarea, audio, video, aside, .navbar, .sidebar, .menu, [class*="nav"], [class*="sidebar"], [class*="footer"]').forEach(el => el.remove());
+    const mainArea = clone.querySelector('main, #main, .main, [role="main"], .quiz-content, .exam-content, .paper-container, .ant-layout-content, #content, .content') || clone;
+    const pageText = (mainArea.innerText || mainArea.textContent || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    if (!pageText || pageText.length < 50) return null;
+
+    const prompt = `Bạn là chuyên gia bóc tách cấu trúc đề thi trắc nghiệm siêu chuẩn xác.
+Hãy đọc kỹ văn bản đề thi dưới đây và trích xuất TOÀN BỘ các câu hỏi trắc nghiệm thành một mảng JSON hợp lệ.
+
+CÁC NGUYÊN TẮC BẮT BUỘC:
+1. ĐOẠN VĂN ĐỌC HIỂU (Reading passage, Announcement, Đoạn văn điền từ, Dữ liệu chung...):
+   - Nếu có đoạn văn dùng chung cho một nhóm câu (ví dụ: từ câu 13 đến 16, hoặc bài đọc 31-36...), BẮT BUỘC phải trích xuất TOÀN BỘ nội dung bài đọc đó vào trường "passage" của tất cả các câu hỏi thuộc nhóm đó!
+   - Nếu là câu hỏi độc lập bình thường không có bài đọc hiểu, để "passage": null.
+2. BỎ QUA CÁC THÀNH PHẦN RÁC:
+   - Đồng hồ đếm ngược (ví dụ 54:20), bảng danh sách câu hỏi, điểm số (ví dụ Điểm: 0.25), nút nộp bài, thông tin người dùng.
+3. CẤU TRÚC MỖI CÂU HỎI TRONG MẢNG:
+   - "num": số thứ tự câu hỏi (số nguyên, ví dụ 1, 2, 13...)
+   - "title": đề bài câu hỏi (hoặc câu hỏi ngắn, KHÔNG bao gồm bài đọc hiểu chung)
+   - "passage": nội dung đoạn văn đọc hiểu chung (nếu có, hoặc null)
+   - "options": mảng các lựa chọn, mỗi phần tử là {"key": "A"|"B"|"C"|"D", "text": "nội dung đáp án đã bỏ tiền tố A/B/C/D và bỏ điểm số"}
+
+ĐỊNH DẠNG ĐẦU RA:
+Chỉ trả về DUY NHẤT một khối JSON hợp lệ dạng:
+[
+  {
+    "num": 1,
+    "passage": null,
+    "title": "Nội dung câu hỏi...",
+    "options": [
+      { "key": "A", "text": "..." },
+      { "key": "B", "text": "..." }
+    ]
+  }
+]
+
+VĂN BẢN ĐỀ THI:
+${pageText.slice(0, 45000)}`;
+
+    let content = null;
+    if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
+      const resp = await new Promise(resolve => {
+        chrome.runtime.sendMessage({
+          action: 'CALL_KEY4U_AI',
+          prompt: prompt,
+          model: detectModel || 'gpt-5.4-nano',
+          apiKey: apiKey || DEFAULT_API_KEY
+        }, (res) => resolve(res));
+      });
+      if (resp && resp.success && resp.data) {
+        content = resp.data.explanation || resp.data.rawContent || JSON.stringify(resp.data);
+      }
+    }
+
+    if (!content) {
+      const direct = await directKey4USolve(prompt, detectModel || 'gpt-5.4-nano', apiKey || DEFAULT_API_KEY);
+      if (direct && direct.success && direct.data) {
+        content = direct.data.explanation || direct.data.rawContent || JSON.stringify(direct.data);
+      }
+    }
+
+    if (!content) return null;
+    const m = content.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    if (m) content = m[0];
+    let parsed = null;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      return null;
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+    inPageMapAiQuestions(parsed);
+
+    return parsed.map((item, idx) => {
+      let finalTitle = item.title || `Câu hỏi ${item.num || (idx + 1)}`;
+      if (item.passage) {
+        finalTitle = `[ĐỌC HIỂU / READING PASSAGE]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
+      }
+      const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
+      const qId = `qa-detected-ai-${qNum}`;
+      const options = (item.options || []).map((o, optIdx) => {
+        const key = (o.key || String.fromCharCode(65 + optIdx)).toUpperCase();
+        const optText = (o.text || '').trim();
+        return {
+          key: key,
+          text: optText,
+          raw: `${key}. ${optText}`,
+          isChecked: false
+        };
+      });
+
+      return {
+        id: qId,
+        num: qNum,
+        index: idx + 1,
+        title: finalTitle,
+        image: null,
+        options: options,
+        selectedAnswer: null
+      };
+    });
+  }
 
   // Hàm gọi API trực tiếp (khi chạy không qua background hoặc chạy thẳng F12 console)
   async function directKey4USolve(prompt, model, apiKey) {
@@ -1063,27 +1241,33 @@
     isSolvingProcess = true;
 
     try {
-      console.log('[AutoSolver Stealth] Đang quét câu hỏi...');
-      const questions = extractQuestionsAndAnswers();
+      let apiKey = DEFAULT_API_KEY;
+      let model = DEFAULT_MODEL;
+      let detectModel = 'gpt-5.4-nano';
+      if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+        try {
+          const stored = await new Promise(r => {
+            chrome.storage.local.get(['key4uApiKey', 'key4uModel', 'key4uModelDetect'], (res) => r(res || {}));
+          });
+          if (stored?.key4uApiKey) apiKey = stored.key4uApiKey;
+          if (stored?.key4uModel) model = stored.key4uModel;
+          if (stored?.key4uModelDetect) detectModel = stored.key4uModelDetect;
+        } catch (e) {}
+      }
+
+      console.log(`[AutoSolver Stealth] Đang bóc tách đề bằng AI (${detectModel})...`);
+      let questions = await extractQuestionsWithAI(apiKey, detectModel);
+      if (!questions || questions.length === 0) {
+        questions = extractQuestionsAndAnswers();
+      }
+
       if (!questions || questions.length === 0) {
         console.log('[AutoSolver Stealth] Không tìm thấy câu hỏi nào trên trang.');
         isSolvingProcess = false;
         return;
       }
 
-      console.log(`[AutoSolver Stealth] Đang giải ${questions.length} câu với GPT-5.5...`);
-
-      let apiKey = DEFAULT_API_KEY;
-      let model = DEFAULT_MODEL;
-      if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
-        try {
-          const stored = await new Promise(r => {
-            chrome.storage.local.get(['key4uApiKey', 'key4uModel'], (res) => r(res || {}));
-          });
-          if (stored?.key4uApiKey) apiKey = stored.key4uApiKey;
-          if (stored?.key4uModel) model = stored.key4uModel;
-        } catch (e) {}
-      }
+      console.log(`[AutoSolver Stealth] Đang giải ${questions.length} câu với ${model}...`);
 
       let successCount = 0;
       for (let i = 0; i < questions.length; i++) {

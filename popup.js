@@ -1388,8 +1388,8 @@ ${pageText.slice(0, 45000)}`;
     }
   }
 
-  btnScan.addEventListener('click', performScan);
-  btnScanAI.addEventListener('click', performAIScan);
+  if (btnScan) btnScan.addEventListener('click', performScan);
+  if (btnScanAI) btnScanAI.addEventListener('click', performAIScan);
 
   // Gọi Key4U API giải 1 câu hỏi
   async function solveQuestionWithAI(q) {
@@ -1515,7 +1515,7 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   // Giải toàn bộ câu hỏi và tự động chọn trên web
   btnSolveAll.addEventListener('click', async () => {
     if (allQuestions.length === 0) {
-      await performScan();
+      await performAIScan();
       if (allQuestions.length === 0) return;
     }
 
@@ -1526,6 +1526,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       return showToast('Vui lòng nhập Key4U API Key trước!', true);
     }
 
+    const modelName = txtModel.value.trim() || DEFAULT_MODEL;
+
     btnSolveAll.disabled = true;
     btnSolveAll.innerHTML = `
       <svg class="spin" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
@@ -1535,7 +1537,7 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
     `;
 
     let successCount = 0;
-    showToast(`Bắt đầu giải ${allQuestions.length} câu với GPT-5.5...`);
+    showToast(`Bắt đầu giải ${allQuestions.length} câu với ${modelName}...`);
 
     for (let i = 0; i < allQuestions.length; i++) {
       const q = allQuestions[i];
