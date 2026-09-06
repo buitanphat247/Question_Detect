@@ -44,6 +44,8 @@
       .replace(/\s{2,}/g, ' ')
       .replace(/^đoạn văn câu hỏi\s*/i, '')
       .replace(/^question text\s*/i, '')
+      .replace(/^chưa trả lời\s*/i, '')
+      .replace(/^not yet answered\s*/i, '')
       .trim();
   }
 
@@ -53,31 +55,69 @@
     return SYSTEM_SPAM_WORDS.some(spam => lower === spam || lower.startsWith(spam) || (lower.length < 40 && lower.includes(spam)));
   }
 
-  function cleanOptionText(text, currentKey) {
+  function stripOptionPrefix(text, expectedKey) {
     if (!text) return '';
-    let clean = cleanText(text);
+    let s = cleanText(text);
 
-    if (currentKey) {
-      const selfPrefix = new RegExp(`^\\s*${currentKey}[\\.\\)\\/\\:\\–—\\-]\\s*`, 'i');
-      clean = clean.replace(selfPrefix, '').trim();
-    }
+    if (expectedKey) {
+      const k = expectedKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Bỏ prefix có dấu phân cách rõ ràng: "A.", "A)", "A:", "(A)", "[A]", hoặc "A. A."
+      const prefixRegex = new RegExp(`^\\s*(?:(?:\\(?\\[?${k}\\)?\\]?[\\.\\)\\:\\/]|\\(${k}\\)|\\[${k}\\])\\s*)+`, 'i');
+      s = s.replace(prefixRegex, '').trim();
 
-    const nextKeyRegex = /(?:^|\s+)([A-Ha-hĐđ])[\.\)\/:\–—\-]\s+/g;
-    let match;
-    let cutIndex = -1;
-    while ((match = nextKeyRegex.exec(clean)) !== null) {
-      const foundKey = match[1].toUpperCase();
-      if (!currentKey || foundKey !== currentKey.toUpperCase()) {
-        cutIndex = match.index;
-        break;
+      // Nếu prefix dùng gạch ngang (ví dụ "A - Văn bản"), chỉ bỏ khi đằng sau KHÔNG phải chuỗi hoán vị (như "d - e - a")
+      if (!/^[a-z]\s*[\-\–—]\s*[a-z]\s*[\-\–—]/i.test(s)) {
+        const dashPrefix = new RegExp(`^\\s*${k}\\s*[\\–—\\-]\\s+`, 'i');
+        s = s.replace(dashPrefix, '').trim();
       }
     }
 
-    if (cutIndex !== -1) {
-      clean = clean.slice(0, cutIndex).trim();
-    }
+    // Bỏ prefix chung nếu còn: "(A)", "[A]", "A.", "A)", "A:"
+    s = s.replace(/^\s*(?:\([A-Za-z0-9Đđ]\)|\[[A-Za-z0-9Đđ]\]|[A-Za-z0-9Đđ①-⑩❶-❿Ⓐ-Ⓗ][\.\)\:\/])\s*/, '').trim();
+    s = s.replace(/\s*(?:clear my choice|xóa lựa chọn|flag question)\s*$/i, '').trim();
 
-    return clean;
+    return s;
+  }
+
+  function cleanOptionText(text, currentKey) {
+    return stripOptionPrefix(text, currentKey);
+  }
+
+  function extractRichText(element) {
+    if (!element) return '';
+    const clone = element.cloneNode(true);
+
+    // 1. Xóa các phần tử ẩn hoặc vô hình
+    clone.querySelectorAll('.accesshide, .sr-only, .sr-only-focusable, .hidden-screen, [aria-hidden="true"]').forEach(el => el.remove());
+
+    // 2. Xử lý KaTeX: Nếu có annotation TeX, lấy TeX; nếu không thì xóa .katex-mathml để không bị lặp chữ
+    clone.querySelectorAll('.katex').forEach(katex => {
+      const tex = katex.querySelector('annotation[encoding="application/x-tex"]');
+      if (tex && tex.textContent.trim()) {
+        katex.textContent = ' ' + tex.textContent.trim() + ' ';
+      } else {
+        katex.querySelectorAll('.katex-mathml').forEach(m => m.remove());
+      }
+    });
+
+    // 3. Xử lý MathJax
+    clone.querySelectorAll('.MathJax_Preview').forEach(el => el.remove());
+
+    // 4. Xử lý sup / sub (ví dụ 10^C, H_2O)
+    clone.querySelectorAll('sup').forEach(sup => {
+      sup.textContent = '^' + sup.textContent.trim();
+    });
+    clone.querySelectorAll('sub').forEach(sub => {
+      sub.textContent = '_' + sub.textContent.trim();
+    });
+
+    // 5. Xử lý ngắt dòng
+    clone.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+    clone.querySelectorAll('p, div, li, tr').forEach(block => {
+      block.insertAdjacentText('afterend', '\n');
+    });
+
+    return cleanText(clone.innerText || clone.textContent);
   }
 
   function extractImageUrl(elem) {
@@ -101,20 +141,22 @@
 
   function splitTextAndOptions(fullRawText) {
     const text = cleanText(fullRawText);
-    const firstOptMatch = text.match(/(?:^|\s+)([A-D|a-d])[\.\)\/:\–—\-]\s+/);
-    
-    if (firstOptMatch) {
-      const splitIdx = text.indexOf(firstOptMatch[0]);
-      if (splitIdx !== -1) {
+    // Tìm A. ... B. ... trong đoạn văn bản (bắt buộc phải có cả A và B sau câu hỏi)
+    const optAMatch = text.match(/(?:\s+|^)([A-Da-d])[\.\)\:]\s+/);
+    const optBMatch = text.match(/(?:\s+|^)([B-Db-d])[\.\)\:]\s+/);
+
+    if (optAMatch && optBMatch && text.indexOf(optBMatch[0]) > text.indexOf(optAMatch[0])) {
+      const splitIdx = text.indexOf(optAMatch[0]);
+      if (splitIdx > 5) { // Phải có ít nhất 5 ký tự đề bài trước options
         const titlePart = cleanText(text.slice(0, splitIdx));
         const optsPart = text.slice(splitIdx);
 
         const options = [];
-        const regex = /(?:^|\s+)([A-D|a-d])[\.\)\/:\–—\-]\s*(.*?)(?=(?:\s+[A-D|a-d][\.\)\/:\–—\-]|$))/g;
+        const regex = /(?:\s+|^)([A-Da-d])[\.\)\:]\s*(.*?)(?=(?:\s+[A-Da-d][\.\)\:]|$))/g;
         let m;
         while ((m = regex.exec(optsPart)) !== null) {
           const key = m[1].toUpperCase();
-          const optVal = cleanOptionText(m[2], key);
+          const optVal = stripOptionPrefix(m[2], key);
           if (optVal) {
             options.push({
               key: key,
@@ -141,17 +183,19 @@
       if (labelEl) {
         const clone = labelEl.cloneNode(true);
         clone.querySelectorAll('.accesshide, .sr-only, input').forEach(el => el.remove());
-        rawText = cleanText(clone.innerText || clone.textContent);
+        rawText = extractRichText(clone);
       }
     }
 
     if (!rawText && inputNode.id) {
-      const labelFor = document.querySelector(`label[for="${inputNode.id}"]`);
-      if (labelFor) {
-        const clone = labelFor.cloneNode(true);
-        clone.querySelectorAll('.accesshide, .sr-only, input').forEach(el => el.remove());
-        rawText = cleanText(clone.innerText || clone.textContent);
-      }
+      try {
+        const labelFor = document.querySelector(`label[for="${CSS.escape(inputNode.id)}"]`);
+        if (labelFor) {
+          const clone = labelFor.cloneNode(true);
+          clone.querySelectorAll('.accesshide, .sr-only, input').forEach(el => el.remove());
+          rawText = extractRichText(clone);
+        }
+      } catch (e) {}
     }
 
     if (!rawText) {
@@ -159,27 +203,52 @@
       if (closestLabel) {
         const clone = closestLabel.cloneNode(true);
         clone.querySelectorAll('.accesshide, .sr-only, input').forEach(el => el.remove());
-        rawText = cleanText(clone.innerText || clone.textContent);
+        rawText = extractRichText(clone);
       }
     }
 
     if (!rawText) {
       const sib = inputNode.nextElementSibling;
-      if (sib) rawText = cleanText(sib.innerText || sib.textContent);
+      if (sib) rawText = extractRichText(sib);
     }
 
     return rawText || fallbackContainerText;
   }
 
-  // Tầng 1: Moodle / LMS
-  function extractMoodleOrQuizContainers() {
-    const questionBoxes = Array.from(document.querySelectorAll('.que, .form-group.question, [id^="question-"]')).filter(isVisible);
+  // Tầng 1: Nhận diện cấu trúc thẻ câu hỏi điển hình (Moodle, Canvas, Subtt, Azota, Yourhomework...)
+  function extractQuizContainers() {
+    const containerSelectors = [
+      '.que',
+      '[id^="question-"]',
+      '[id^="que-"]',
+      '[class*="question-item"]',
+      '[class*="question_item"]',
+      '[class*="questionBox"]',
+      '[class*="question-box"]',
+      '[class*="question-holder"]',
+      '[class*="quiz-item"]',
+      '[class*="quiz_item"]',
+      '[class*="quiz-question"]',
+      '[class*="test-item"]',
+      '[class*="exam-item"]',
+      '[class*="cau-hoi"]',
+      '[class*="cauhoi"]',
+      '[class*="box-cauhoi"]'
+    ];
+
+    let questionBoxes = Array.from(document.querySelectorAll(containerSelectors.join(', '))).filter(isVisible);
+
+    // Lọc bỏ container cha bao bọc container con
+    questionBoxes = questionBoxes.filter(box => {
+      return !questionBoxes.some(other => other !== box && other.contains(box));
+    });
+
     if (questionBoxes.length === 0) return null;
 
     const results = [];
     questionBoxes.forEach((box, idx) => {
       let qNum = idx + 1;
-      const numElem = box.querySelector('.qno, .no, .info .no, .info .header');
+      const numElem = box.querySelector('.qno, .no, .info .no, .info .header, .q-number, .question-number, b, strong');
       if (numElem) {
         const text = cleanText(numElem.textContent);
         const matchNum = text.match(/\d+/);
@@ -190,89 +259,101 @@
       }
 
       let title = '';
-      const qtextEl = box.querySelector('.qtext');
+      const qtextEl = box.querySelector('.qtext, [class*="question-title"], [class*="question-text"], [class*="content-question"], .stem');
       if (qtextEl) {
         const clone = qtextEl.cloneNode(true);
-        clone.querySelectorAll('.accesshide, .sr-only, .sr-only-focusable, input').forEach(el => el.remove());
-        title = cleanText(clone.innerText || clone.textContent);
+        clone.querySelectorAll('.accesshide, .sr-only, .sr-only-focusable, input, .ablock, .answer').forEach(el => el.remove());
+        title = extractRichText(clone);
       } else {
-        const formEl = box.querySelector('.formulation');
-        if (formEl) {
-          const clone = formEl.cloneNode(true);
-          clone.querySelectorAll('.accesshide, .sr-only, .ablock, .answer, input, h4').forEach(el => el.remove());
-          title = cleanText(clone.innerText || clone.textContent);
-        }
+        const formEl = box.querySelector('.formulation') || box;
+        const clone = formEl.cloneNode(true);
+        clone.querySelectorAll('.accesshide, .sr-only, .ablock, .answer, .r0, .r1, input, h4, .qtype_multichoice_clearchoice, [class*="option"], [class*="answer"]').forEach(el => el.remove());
+        title = extractRichText(clone);
       }
 
-      if (!title) title = `Câu hỏi ${qNum}`;
+      if (!title || title.length < 3) title = `Câu hỏi ${qNum}`;
 
       const imgSrc = extractImageUrl(qtextEl || box);
       const options = [];
-      const optionRows = Array.from(box.querySelectorAll('.answer > div, .answer > li, .ablock .r0, .ablock .r1, .form-check')).filter(isVisible);
-      
-      const qId = `qa-detected-lms-${qNum}`;
+      const qId = `qa-detected-quiz-${qNum}`;
       box.setAttribute('data-qa-id', qId);
 
-      optionRows.forEach((row, rowIdx) => {
-        if (row.querySelector('.qtype_multichoice_clearchoice') || row.classList.contains('qtype_multichoice_clearchoice')) {
-          return;
-        }
+      // Tìm các lựa chọn đáp án: ưu tiên thẻ input (radio/checkbox)
+      const inputs = Array.from(box.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+        .filter(inp => !inp.closest('.qtype_multichoice_clearchoice') && isVisible(inp.parentElement || inp));
 
-        const input = row.querySelector('input[type="radio"], input[type="checkbox"]');
-        const isChecked = input ? input.checked : false;
+      if (inputs.length >= 2) {
+        inputs.forEach((input, optIdx) => {
+          let optRaw = getOptionTextFromInput(input, cleanText(input.parentElement?.innerText || ''));
+          let key = String.fromCharCode(65 + optIdx);
+          const match = optRaw.match(OPTION_PREFIX_REGEX);
+          if (match) {
+            key = match[1].toUpperCase();
+            optRaw = match[2];
+          }
+          const optText = stripOptionPrefix(optRaw, key);
+          if (!optText || isSpamText(optText)) return;
 
-        let optText = '';
-        const answerLabel = row.querySelector('[data-region="answer-label"], .d-flex, label, .flex-fill');
-        if (answerLabel) {
-          const clone = answerLabel.cloneNode(true);
-          clone.querySelectorAll('.accesshide, .sr-only, input').forEach(el => el.remove());
-          optText = cleanText(clone.innerText || clone.textContent);
-        } else {
-          optText = cleanText(row.innerText || row.textContent);
-        }
-
-        if (isSpamText(optText) || !optText) return;
-
-        let key = String.fromCharCode(65 + options.length);
-        const match = optText.match(OPTION_PREFIX_REGEX);
-        if (match) {
-          key = match[1].toUpperCase();
-          optText = match[2];
-        }
-
-        optText = cleanOptionText(optText, key);
-
-        // Gắn selector chuẩn
-        row.setAttribute('data-qa-for', qId);
-        row.setAttribute('data-qa-opt', key);
-        if (input) {
           input.setAttribute('data-qa-for', qId);
           input.setAttribute('data-qa-opt', key);
-        }
+          if (input.parentElement) {
+            input.parentElement.setAttribute('data-qa-for', qId);
+            input.parentElement.setAttribute('data-qa-opt', key);
+          }
 
-        options.push({
-          key: key,
-          text: optText,
-          raw: `${key}. ${optText}`,
-          isChecked: isChecked
+          options.push({
+            key: key,
+            text: optText,
+            raw: `${key}. ${optText}`,
+            isChecked: input.checked
+          });
         });
-      });
+      } else {
+        // Nếu không có input radio, tìm các hàng đáp án (div, li, label, .r0, .r1, .form-check, .option)
+        const optionRows = Array.from(box.querySelectorAll('.answer > div, .answer > li, .ablock .r0, .ablock .r1, .form-check, [class*="option-item"], [class*="choice"]')).filter(isVisible);
+        optionRows.forEach((row, optIdx) => {
+          if (row.querySelector('.qtype_multichoice_clearchoice') || row.classList.contains('qtype_multichoice_clearchoice')) return;
+          let optRaw = cleanText(row.innerText || row.textContent);
+          if (!optRaw || isSpamText(optRaw)) return;
 
-      results.push({
-        id: qId,
-        num: qNum,
-        index: idx + 1,
-        title: title,
-        image: imgSrc,
-        options: options,
-        selectedAnswer: options.find(o => o.isChecked)?.key || null
-      });
+          let key = String.fromCharCode(65 + optIdx);
+          const match = optRaw.match(OPTION_PREFIX_REGEX);
+          if (match) {
+            key = match[1].toUpperCase();
+            optRaw = match[2];
+          }
+          const optText = stripOptionPrefix(optRaw, key);
+          if (!optText) return;
+
+          row.setAttribute('data-qa-for', qId);
+          row.setAttribute('data-qa-opt', key);
+
+          options.push({
+            key: key,
+            text: optText,
+            raw: `${key}. ${optText}`,
+            isChecked: false
+          });
+        });
+      }
+
+      if (options.length >= 2 || (title && title.length > 10)) {
+        results.push({
+          id: qId,
+          num: qNum,
+          index: idx + 1,
+          title: title,
+          image: imgSrc,
+          options: options,
+          selectedAnswer: options.find(o => o.isChecked)?.key || null
+        });
+      }
     });
 
     return results.length > 0 ? results : null;
   }
 
-  // Tầng 2: Heuristic tổng quát
+  // Tầng 2: Heuristic tổng quát (Xử lý trang layout phẳng, không dùng class container)
   function extractGenericDOMQuestions() {
     const allElements = Array.from(document.body.querySelectorAll('*')).filter(el => {
       if (IGNORE_TAGS.has(el.tagName)) return false;
@@ -312,8 +393,8 @@
       if (!hasChild) atomicNodes.push(el);
     }
 
-    const questionMap = new Map();
-    let currentQNum = null;
+    const questionList = [];
+    let currentQ = null;
 
     for (let i = 0; i < atomicNodes.length; i++) {
       const node = atomicNodes[i];
@@ -322,157 +403,146 @@
 
       if (isSpamText(rawText)) continue;
 
+      // 1. Ảnh
       if (node.tagName === 'IMG' || (!rawText && imgSrc)) {
-        if (currentQNum !== null && questionMap.has(currentQNum)) {
-          const qObj = questionMap.get(currentQNum);
-          if (!qObj.image && imgSrc) qObj.image = imgSrc;
+        if (currentQ && !currentQ.image && imgSrc) {
+          currentQ.image = imgSrc;
         }
         continue;
       }
 
-      if (node.tagName === 'INPUT' && (node.type === 'radio' || node.type === 'checkbox')) {
-        if (currentQNum !== null && questionMap.has(currentQNum)) {
-          const qObj = questionMap.get(currentQNum);
-          let containerText = cleanText(node.parentElement?.innerText || '');
-          if (isSpamText(containerText)) continue;
-
-          const optRaw = getOptionTextFromInput(node, containerText);
-          let key = null;
-          let optText = '';
-
-          const match = optRaw.match(OPTION_PREFIX_REGEX);
-          if (match) {
-            key = match[1].toUpperCase();
-            optText = match[2];
-          } else {
-            key = String.fromCharCode(65 + qObj.optionsMap.size);
-            optText = optRaw;
-          }
-
-          optText = cleanOptionText(optText, key);
-
-          if (key && optText && !isSpamText(optText)) {
-            node.setAttribute('data-qa-for', qObj.id);
-            node.setAttribute('data-qa-opt', key);
-            if (node.parentElement) {
-              node.parentElement.setAttribute('data-qa-for', qObj.id);
-              node.parentElement.setAttribute('data-qa-opt', key);
-            }
-
-            const existing = qObj.optionsMap.get(key);
-            if (!existing || (optText !== existing.text && optText.length > 0 && !optText.includes('B.') && !optText.includes('C.'))) {
-              qObj.optionsMap.set(key, {
-                key: key,
-                text: optText,
-                raw: `${key}. ${optText}`,
-                isChecked: node.checked
-              });
-            }
-            if (node.checked) qObj.selectedAnswer = key;
-          }
-        }
-        continue;
-      }
-
-      if (!rawText) continue;
-
+      // 2. Kiểm tra nếu là tiêu đề câu hỏi mới (ví dụ: "Question 1.", "Câu 1:")
       const qMatch = rawText.match(QUESTION_HEADER_REGEX);
       if (qMatch && !isSpamText(rawText)) {
         const qNum = parseInt(qMatch[1], 10);
-        currentQNum = qNum;
-
         const qId = `qa-detected-${qNum}`;
         node.setAttribute('data-qa-id', qId);
 
-        const { title: cleanTitle, options: inlineOptions } = splitTextAndOptions(rawText);
-
-        if (!questionMap.has(qNum)) {
-          const newQ = {
-            id: qId,
-            num: qNum,
-            title: cleanTitle,
-            image: imgSrc,
-            optionsMap: new Map(),
-            selectedAnswer: null
-          };
-          inlineOptions.forEach(opt => newQ.optionsMap.set(opt.key, opt));
-          questionMap.set(qNum, newQ);
-        } else {
-          const existing = questionMap.get(qNum);
-          if (cleanTitle.length > existing.title.length && cleanTitle.length > 10) {
-            existing.title = cleanTitle;
-          }
-          if (!existing.image && imgSrc) existing.image = imgSrc;
-          inlineOptions.forEach(opt => {
-            if (!existing.optionsMap.has(opt.key)) {
-              existing.optionsMap.set(opt.key, opt);
-            }
-          });
-        }
+        currentQ = {
+          id: qId,
+          num: qNum,
+          title: rawText,
+          image: imgSrc,
+          inputs: [],
+          optionNodes: []
+        };
+        questionList.push(currentQ);
         continue;
       }
 
+      if (!currentQ) continue;
+
+      // 3. Nếu là thẻ INPUT radio/checkbox
+      if (node.tagName === 'INPUT' && (node.type === 'radio' || node.type === 'checkbox')) {
+        currentQ.inputs.push(node);
+        continue;
+      }
+
+      // 4. Nếu là text có tiền tố A, B, C, D
       const optMatch = rawText.match(OPTION_PREFIX_REGEX);
-      if (optMatch && currentQNum !== null && questionMap.has(currentQNum) && !isSpamText(rawText)) {
-        const qObj = questionMap.get(currentQNum);
-        const key = optMatch[1].toUpperCase();
-        let optText = cleanOptionText(optMatch[2] || rawText, key);
-
-        if (optText && !isSpamText(optText)) {
-          node.setAttribute('data-qa-for', qObj.id);
-          node.setAttribute('data-qa-opt', key);
-
-          const existing = qObj.optionsMap.get(key);
-          if (!existing || (optText.length < existing.text.length && (existing.text.includes('B.') || existing.text.includes('C.')))) {
-            qObj.optionsMap.set(key, {
-              key: key,
-              text: optText,
-              raw: `${key}. ${optText}`,
-              isChecked: false
-            });
-          }
-        }
+      if (optMatch && !isSpamText(rawText)) {
+        currentQ.optionNodes.push({ node, key: optMatch[1].toUpperCase(), rawText });
         continue;
       }
 
-      if (currentQNum !== null && questionMap.has(currentQNum)) {
-        const qObj = questionMap.get(currentQNum);
-        if (qObj.optionsMap.size === 0 && !isSpamText(rawText) && rawText.length < 400) {
-          if (!qObj.title.includes(rawText)) {
-            if (qObj.title.length <= 15) {
-              qObj.title = `Câu hỏi ${qObj.num}. ` + rawText;
-            } else {
-              qObj.title += ' ' + rawText;
-            }
-          }
+      // 5. Nếu là text thân bài của câu hỏi (trước khi có input/option)
+      if (currentQ.inputs.length === 0 && currentQ.optionNodes.length === 0 && rawText.length < 400 && !isSpamText(rawText)) {
+        if (!currentQ.title.includes(rawText)) {
+          currentQ.title += ' ' + rawText;
         }
       }
     }
 
-    return Array.from(questionMap.values())
-      .filter(q => q.title.length > 8 || q.optionsMap.size > 0 || q.image)
-      .sort((a, b) => a.num - b.num)
-      .map((q, idx) => {
-        const cleanedOpts = Array.from(q.optionsMap.values()).map(opt => ({
-          ...opt,
-          text: cleanOptionText(opt.text, opt.key),
-          raw: `${opt.key}. ${cleanOptionText(opt.text, opt.key)}`
-        })).sort((a, b) => a.key.localeCompare(b.key));
+    // Xử lý hoàn thiện từng câu hỏi
+    const results = [];
+    questionList.forEach((q, idx) => {
+      const options = [];
+      const optionsMap = new Map();
 
-        return {
+      // Trường hợp 1: Có các thẻ input radio/checkbox trực tiếp
+      if (q.inputs.length >= 2) {
+        q.inputs.forEach((input, optIdx) => {
+          let containerText = cleanText(input.parentElement?.innerText || '');
+          let optRaw = getOptionTextFromInput(input, containerText);
+          let key = String.fromCharCode(65 + optIdx);
+
+          const match = optRaw.match(OPTION_PREFIX_REGEX);
+          if (match) {
+            key = match[1].toUpperCase();
+            optRaw = match[2];
+          }
+
+          const optText = stripOptionPrefix(optRaw, key);
+          if (!optText || isSpamText(optText)) return;
+
+          input.setAttribute('data-qa-for', q.id);
+          input.setAttribute('data-qa-opt', key);
+          if (input.parentElement) {
+            input.parentElement.setAttribute('data-qa-for', q.id);
+            input.parentElement.setAttribute('data-qa-opt', key);
+          }
+
+          if (!optionsMap.has(key)) {
+            const optObj = {
+              key: key,
+              text: optText,
+              raw: `${key}. ${optText}`,
+              isChecked: input.checked
+            };
+            optionsMap.set(key, optObj);
+            options.push(optObj);
+          }
+        });
+      }
+      // Trường hợp 2: Có các nút text mang tiền tố A, B, C, D
+      else if (q.optionNodes.length >= 2) {
+        q.optionNodes.forEach(({ node, key, rawText }) => {
+          const optText = stripOptionPrefix(rawText, key);
+          if (!optText || isSpamText(optText)) return;
+
+          node.setAttribute('data-qa-for', q.id);
+          node.setAttribute('data-qa-opt', key);
+
+          if (!optionsMap.has(key)) {
+            const optObj = {
+              key: key,
+              text: optText,
+              raw: `${key}. ${optText}`,
+              isChecked: false
+            };
+            optionsMap.set(key, optObj);
+            options.push(optObj);
+          }
+        });
+      }
+      // Trường hợp 3: Đoạn text câu hỏi chứa inline options
+      else {
+        const { title: cleanTitle, options: inlineOptions } = splitTextAndOptions(q.title);
+        if (inlineOptions.length >= 2) {
+          q.title = cleanTitle;
+          inlineOptions.forEach(opt => options.push(opt));
+        }
+      }
+
+      if (options.length > 0 || q.title.length > 8 || q.image) {
+        results.push({
           id: q.id,
+          num: q.num,
           index: idx + 1,
           title: q.title,
           image: q.image,
-          options: cleanedOpts,
-          selectedAnswer: q.selectedAnswer
-        };
-      });
+          options: options.sort((a, b) => a.key.localeCompare(b.key)),
+          selectedAnswer: options.find(o => o.isChecked)?.key || null
+        });
+      }
+    });
+
+    return results;
   }
 
   function extractQuestionsAndAnswers() {
     clearHighlights();
-    const lmsResults = extractMoodleOrQuizContainers();
+    const lmsResults = extractQuizContainers();
     if (lmsResults && lmsResults.length > 0) {
       return lmsResults;
     }
