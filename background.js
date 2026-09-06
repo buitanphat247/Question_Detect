@@ -97,7 +97,13 @@ async function solveWithKey4U(prompt, model, apiKey, imageUrl) {
     { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' }
   ];
 
-  const hasVisionImage = imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://') || imageUrl.startsWith('data:image/'));
+  const hasVisionImage = imageUrl && (
+    imageUrl.startsWith('http://') || 
+    imageUrl.startsWith('https://') || 
+    imageUrl.startsWith('data:image/png') || 
+    imageUrl.startsWith('data:image/jpeg') || 
+    imageUrl.startsWith('data:image/webp')
+  );
   if (hasVisionImage) {
     messages.push({
       role: 'user',
@@ -156,10 +162,23 @@ async function solveWithKey4U(prompt, model, apiKey, imageUrl) {
     if (!text) return null;
     let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
     const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
-      try { return JSON.parse(jsonStr); } catch (e) {}
+    const firstBracket = cleaned.indexOf('[');
+    
+    // Nếu là JSON array
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      const lastBracket = cleaned.lastIndexOf(']');
+      if (lastBracket > firstBracket) {
+        const jsonArr = cleaned.slice(firstBracket, lastBracket + 1);
+        try { return JSON.parse(jsonArr); } catch (e) {}
+      }
+    }
+
+    if (firstBrace !== -1) {
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (lastBrace > firstBrace) {
+        const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
+        try { return JSON.parse(jsonStr); } catch (e) {}
+      }
     }
     try { return JSON.parse(cleaned); } catch (e) {}
     return null;
@@ -173,8 +192,12 @@ async function solveWithKey4U(prompt, model, apiKey, imageUrl) {
     }
   }
 
-  if (!parsed || (!parsed.answer && !parsed.answers)) {
-    throw new Error('AI không trả về đáp án rõ ràng.');
+  if (!parsed) {
+    throw new Error('AI không trả về kết quả hợp lệ.');
+  }
+
+  if (Array.isArray(parsed)) {
+    return { questions: parsed, rawContent: content };
   }
 
   if (parsed.answer) {

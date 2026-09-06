@@ -403,12 +403,28 @@ function inPageExtractQA() {
 
       let imgSrc = extractImageUrl(qtextEl || box);
       if (!imgSrc) {
+        const qTitleText = cleanText(title || '');
+        const asksForMedia = /(?:bảng|table|hình|ảnh|sơ đồ|đồ thị|biểu đồ|biển báo|thông báo|notice|sign|figure|diagram|picture|image|chart|sau đây|dưới đây)/i.test(qTitleText);
+
         const allMedia = Array.from(document.querySelectorAll('img, svg, canvas, .yh-player-media, .yh-player-media--section, [class*="player-media"], [class*="section-media"]'));
-        const preceding = allMedia.filter(el => !box.contains(el) && (el.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING));
+        const preceding = allMedia.filter(el => {
+          if (box.contains(el)) return false;
+          if (el.closest('header, nav, footer, #page-header, #header, .navbar, .breadcrumb, [class*="breadcrumb"], [class*="banner"], [class*="logo"], [class*="avatar"], [class*="user"], [class*="profile"], aside, [class*="drawer"]')) {
+            return false;
+          }
+          return (el.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING);
+        });
+
         for (let i = preceding.length - 1; i >= 0; i--) {
           const el = preceding[i];
           const otherBox = el.closest(containerSelectors.join(', '));
           if (otherBox && otherBox !== box) continue;
+
+          const isExplicitSectionMedia = !!el.closest('.yh-player-media, .yh-player-media--section, [class*="section-media"], [class*="player-media"]');
+          if (!asksForMedia && !isExplicitSectionMedia) {
+            continue;
+          }
+
           const candidate = extractImageUrl(el);
           if (candidate) {
             imgSrc = candidate;
@@ -883,13 +899,28 @@ function inPageAutoSelect(qaId, targetKey, optionText) {
       } catch (e) {}
     }
 
-    // Ưu tiên click LABEL hoặc INPUT với đầy đủ mousedown, mouseup, click
-    const clickTarget = label || input || wrapperEl;
-    if (clickTarget) {
+    // Kích hoạt click cả input và label để ăn 100% trên mọi nền tảng (Moodle, Azota, Canvas, YourHomework...)
+    if (input && typeof input.click === 'function') {
       try {
-        clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        clickTarget.click();
+        input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        input.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        input.click();
+      } catch (e) {}
+    }
+
+    if (label && label !== input && typeof label.click === 'function') {
+      try {
+        label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        label.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        label.click();
+      } catch (e) {}
+    }
+
+    if (!input && !label && wrapperEl) {
+      try {
+        wrapperEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        wrapperEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        wrapperEl.click();
       } catch (e) {}
     }
 
@@ -1320,7 +1351,6 @@ function inPageMapAiQuestions(parsedQuestions) {
     return null;
   }
 
-  // Quét tìm hình ảnh, sơ đồ, bảng biểu dạng ảnh hoặc bảng dữ liệu HTML (tìm trong câu hoặc truy ngược lên trên tìm cái gần nhất)
   function findQuestionMedia(qCard, allHeaders, qNum) {
     let foundImg = null;
     let foundTable = null;
@@ -1328,7 +1358,6 @@ function inPageMapAiQuestions(parsedQuestions) {
     const targetNode = qCard || (allHeaders && allHeaders[0]) || null;
     if (!targetNode) return { image: null, table: null };
 
-    // 1. Kiểm tra trực tiếp bên trong câu hỏi (targetNode hoặc qCard)
     foundImg = extractImageFromNode(targetNode);
     if (!foundImg && qCard && qCard !== targetNode) {
       foundImg = extractImageFromNode(qCard);
@@ -1341,6 +1370,9 @@ function inPageMapAiQuestions(parsedQuestions) {
 
     // 2. Quét ngược lên trên tìm hình ảnh / sơ đồ / bảng biểu dạng ảnh gần nhất đứng trước câu hỏi
     if (!foundImg) {
+      const qNodeText = (targetNode.innerText || targetNode.textContent || '').toLowerCase();
+      const asksForMedia = /(?:bảng|table|hình|ảnh|sơ đồ|đồ thị|biểu đồ|biển báo|thông báo|notice|sign|figure|diagram|picture|image|chart|sau đây|dưới đây)/i.test(qNodeText);
+
       const allMediaElements = Array.from(document.querySelectorAll(
         'img, svg, canvas, .yh-player-media, .yh-player-media--section, [class*="player-media"], [class*="section-media"], [class*="image-wrap"]'
       ));
@@ -1348,6 +1380,9 @@ function inPageMapAiQuestions(parsedQuestions) {
       // Lọc các phần tử media nằm TRƯỚC targetNode trong DOM
       const precedingMedia = allMediaElements.filter(el => {
         if (targetNode.contains(el)) return false;
+        if (el.closest('header, nav, footer, #page-header, #header, .navbar, .breadcrumb, [class*="breadcrumb"], [class*="banner"], [class*="logo"], [class*="avatar"], [class*="user"], [class*="profile"], aside, [class*="drawer"]')) {
+          return false;
+        }
         try {
           return (el.compareDocumentPosition(targetNode) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
         } catch (e) {
@@ -1362,6 +1397,11 @@ function inPageMapAiQuestions(parsedQuestions) {
         // Bỏ qua nếu đây là hình ảnh nội bộ nằm trong card câu hỏi khác
         const otherQCard = el.closest('.yh-question-card, .que, [class*="question-card"], [id^="q-"]');
         if (otherQCard && otherQCard !== targetNode) {
+          continue;
+        }
+
+        const isExplicitSectionMedia = !!el.closest('.yh-player-media, .yh-player-media--section, [class*="section-media"], [class*="player-media"]');
+        if (!asksForMedia && !isExplicitSectionMedia) {
           continue;
         }
 
@@ -1381,6 +1421,7 @@ function inPageMapAiQuestions(parsedQuestions) {
         const allTables = Array.from(document.querySelectorAll('table'));
         const precedingTables = allTables.filter(tbl => {
           if (targetNode.contains(tbl)) return false;
+          if (tbl.closest('header, nav, footer, #page-header, #header, .navbar, .breadcrumb, [class*="breadcrumb"], [class*="banner"], aside')) return false;
           try {
             return (tbl.compareDocumentPosition(targetNode) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
           } catch (e) {
@@ -1405,6 +1446,18 @@ function inPageMapAiQuestions(parsedQuestions) {
     return { image: foundImg, table: foundTable };
   }
 
+  function findLabel(qCard, input) {
+    if (input.id) {
+      const label = document.querySelector(`label[for="${input.id}"]`);
+      if (label) return label;
+    }
+    return input.closest('label') || input.parentElement?.querySelector('label');
+  }
+
+  function cleanText(txt) {
+    return (txt || '').replace(/\s+/g, ' ').trim();
+  }
+
   const imageMap = {};
   const tableMap = {};
 
@@ -1412,13 +1465,16 @@ function inPageMapAiQuestions(parsedQuestions) {
     const qNum = q.num;
     const qId = `qa-detected-ai-${qNum}`;
 
-    // Ưu tiên 1: Tìm chính xác question card theo nhãn số câu hỏi
+    // Ưu tiên 1: Tìm chính xác question card theo nhãn số câu hỏi (Hỗ trợ chuẩn Moodle, YourHomework...)
     let qCard = null;
     const questionCards = Array.from(document.querySelectorAll('.yh-question-card, .que, [class*="question-card"], [id^="q-"]'));
     for (const card of questionCards) {
-      const stem = card.querySelector('.yh-question-stem__label, .yh-question-stem, .qtext, [class*="stem"], h1, h2, h3, h4, h5, b, strong') || card;
-      const stemTxt = (stem.innerText || stem.textContent || '').trim();
-      const m = stemTxt.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+      const numElem = card.querySelector(
+        '.yh-question-stem__label, .qno, .no, .info .no, .info .header, .info h3, ' +
+        '[class*="question-num"], [class*="q-num"], .question-number, h3, h4, h5'
+      ) || card.querySelector('.yh-question-stem, .qtext, [class*="stem"], b, strong') || card;
+      const numTxt = (numElem.innerText || numElem.textContent || '').trim();
+      const m = numTxt.match(/(?:question|câu|câu\s*hỏi|quest|q|bài)\s*(\d+)\b/i);
       if (m && parseInt(m[1], 10) === qNum) {
         qCard = card;
         break;
@@ -1426,9 +1482,12 @@ function inPageMapAiQuestions(parsedQuestions) {
     }
 
     const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, div, p, span, b, strong')).filter(el => {
+      if (el.closest('header, nav, footer, #page-header, #header, .breadcrumb, [class*="breadcrumb"], [class*="banner"], .navbar, [class*="nav"]')) {
+        return false;
+      }
       const txt = (el.innerText || el.textContent || '').trim();
-      if (txt.length > 300) return false;
-      const m = txt.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+      if (txt.length > 150) return false;
+      const m = txt.match(/^(?:question|câu|câu\s*hỏi|quest|q)\s*(?:số\s*)?(\d+)\b/i);
       return m && parseInt(m[1], 10) === qNum;
     });
 
@@ -1512,22 +1571,38 @@ function inPageMapAiQuestions(parsedQuestions) {
           }
         });
       } else {
-        const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+        const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+          .filter(inp => !inp.closest('.qtype_multichoice_clearchoice'));
         if (inputs.length >= 2) {
           inputs.forEach((inp, idx) => {
-            const key = String.fromCharCode(65 + idx);
+            let key = String.fromCharCode(65 + idx);
+            const label = findLabel(null, inp);
+            const txt = cleanText((label ? label.innerText : inp.parentElement?.innerText) || '');
+            const m = txt.match(/(?:^|\s)([A-Da-d])[\.\)\:]/);
+            if (m) {
+              key = m[1].toUpperCase();
+            }
             inp.setAttribute('data-qa-for', qId);
             inp.setAttribute('data-qa-opt', key);
-            const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
+            const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check, .r0, .r1') || inp.parentElement;
             if (wrapper) {
               wrapper.setAttribute('data-qa-for', qId);
               wrapper.setAttribute('data-qa-opt', key);
             }
+            if (label) {
+              label.setAttribute('data-qa-for', qId);
+              label.setAttribute('data-qa-opt', key);
+            }
           });
         } else {
-          const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
+          const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, .r0, .r1, li'));
           rows.forEach((row, idx) => {
-            const key = String.fromCharCode(65 + idx);
+            let key = String.fromCharCode(65 + idx);
+            const txt = cleanText(row.innerText || '');
+            const m = txt.match(/(?:^|\s)([A-Da-d])[\.\)\:]/);
+            if (m) {
+              key = m[1].toUpperCase();
+            }
             row.setAttribute('data-qa-for', qId);
             row.setAttribute('data-qa-opt', key);
           });
@@ -2005,7 +2080,13 @@ ${pageText.slice(0, 45000)}`;
 
     const imgNote = q.image ? (q.image.startsWith('data:') ? '\n(LƯU Ý: Câu hỏi có hình vẽ / sơ đồ minh họa đi kèm)' : `\n(LƯU Ý: Câu hỏi có hình ảnh minh họa đi kèm: ${q.image})`) : '';
     const passageContext = q.passage ? `\n\nBÀI ĐỌC HIỂU / ĐOẠN TƯ LIỆU / BẢNG SỐ LIỆU:\n${q.passage}\n` : '';
-    const hasVisionImage = q.image && (q.image.startsWith('http://') || q.image.startsWith('https://') || q.image.startsWith('data:image/'));
+    const hasVisionImage = q.image && (
+      q.image.startsWith('http://') || 
+      q.image.startsWith('https://') || 
+      q.image.startsWith('data:image/png') || 
+      q.image.startsWith('data:image/jpeg') || 
+      q.image.startsWith('data:image/webp')
+    );
 
     function extractJsonFromText(text) {
       if (!text) return null;
