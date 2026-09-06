@@ -5,7 +5,7 @@
 
 // Hàm chạy trong context trang web
 function inPageExtractQA() {
-  const QUESTION_HEADER_REGEX = /(?:^|\s)(?:câu|question|quest|q|bài|item|câu\s*hỏi)\s*(\d+)/i;
+  const QUESTION_HEADER_REGEX = /(?:^|\s)(?:câu|question|quest|q|bài|item|câu\s*hỏi)\s*(\d+)\b(?![:\/]\d)/i;
   const OPTION_PREFIX_REGEX = /^\s*([A-Za-zĐđ①-⑩❶-❿Ⓐ-Ⓗ])[\.\)\/:\–—\-]\s*(.*)$/;
 
   const SYSTEM_SPAM_WORDS = [
@@ -14,7 +14,8 @@ function inPageExtractQA() {
     'question text', 'bảng câu hỏi', 'quiz navigation', 'trang tiếp', 'next page',
     'quay lại', 'làm xong', 'finish attempt', 'nộp bài', 'kết quả bài làm',
     'tổng hợp bài tập', 'bạn đang đăng nhập', 'logged in as', 'copyright',
-    'mở chỉ số ngăn', 'khóa học', 'course'
+    'mở chỉ số ngăn', 'khóa học', 'course', 'danh sách câu hỏi', 'danh sách câu',
+    'phân nhóm'
   ];
 
   const IGNORE_TAGS = new Set([
@@ -53,7 +54,8 @@ function inPageExtractQA() {
   function isSpamText(text) {
     if (!text) return true;
     const lower = text.toLowerCase().trim();
-    return SYSTEM_SPAM_WORDS.some(spam => lower === spam || lower.startsWith(spam) || (lower.length < 40 && lower.includes(spam)));
+    if (lower.includes('danh sách câu hỏi') || lower.includes('danh sách câu') || lower.includes('phân nhóm') || lower.includes('bảng câu hỏi')) return true;
+    return SYSTEM_SPAM_WORDS.some(spam => lower === spam || lower.startsWith(spam) || (lower.length < 50 && lower.includes(spam)));
   }
 
   function stripOptionPrefix(text, expectedKey) {
@@ -76,6 +78,23 @@ function inPageExtractQA() {
     // Bỏ prefix chung nếu còn: "(A)", "[A]", "A.", "A)", "A:"
     s = s.replace(/^\s*(?:\([A-Za-z0-9Đđ]\)|\[[A-Za-z0-9Đđ]\]|[A-Za-z0-9Đđ①-⑩❶-❿Ⓐ-Ⓗ][\.\)\:\/])\s*/, '').trim();
     s = s.replace(/\s*(?:clear my choice|xóa lựa chọn|flag question)\s*$/i, '').trim();
+
+    // Xóa điểm số rò rỉ cuối option, ví dụ: "(Điểm: 0.25)", "Điểm: 0/0.25", "Marked out of 1.00"
+    s = s.replace(/\s*\(?(?:Điểm|Điểm số|Điểm đạt|Marked out of|Mark|Points?)\s*:\s*[\d\.,\/]+\)?\s*$/i, '').trim();
+    s = s.replace(/\s*\(\s*Điểm\s*:\s*[\d\.,\/]+\s*\)\s*$/i, '').trim();
+
+    // Cắt bỏ phần đáp án kế tiếp bị dính chùm vào (ví dụ option A có text: "learned B. buzzed C. curbed D. squeezed")
+    if (expectedKey && expectedKey.length === 1) {
+      const nextCode = expectedKey.toUpperCase().charCodeAt(0) + 1;
+      if (nextCode <= 90) {
+        const nextKey = String.fromCharCode(nextCode);
+        const nextPattern = new RegExp(`\\s+(?:${nextKey})[\\.\\)\\:]\\s+`, 'i');
+        const nextIdx = s.search(nextPattern);
+        if (nextIdx > 0) {
+          s = s.slice(0, nextIdx).trim();
+        }
+      }
+    }
 
     return s;
   }
@@ -216,10 +235,87 @@ function inPageExtractQA() {
     return rawText || fallbackContainerText;
   }
 
+  // Tầng 0: Nhận diện bài đọc hiểu (Reading Comprehension / Đoạn văn điền từ)
+  function extractReadingPassages() {
+    const readingSelectors = [
+      '.yh-reading-area',
+      '[class*="reading-area"]',
+      '[class*="reading_area"]',
+      '[class*="reading-passage"]',
+      '[class*="reading-content"]',
+      '[class*="reading-text"]',
+      '[class*="reading-box"]',
+      '[class*="passage"]',
+      '.reading-area',
+      '.reading-passage',
+      '.reading',
+      '.passage'
+    ];
+
+    const elements = Array.from(document.querySelectorAll(readingSelectors.join(', '))).filter(isVisible);
+
+    const generalBlocks = Array.from(document.querySelectorAll('.ant-card, .card, blockquote, div[style*="background"]')).filter(el => {
+      if (!isVisible(el)) return false;
+      if (el.matches('.yh-question-card, [class*="question-card"], [id^="q-"], .que')) return false;
+      const text = cleanText(el.textContent || '');
+      return /^(?:read the following|đọc đoạn văn|đọc bài đọc|đọc kỹ đoạn văn|đọc hiểu|dưới đây là bài đọc|read the text)/i.test(text);
+    });
+
+    const allPassageElements = Array.from(new Set([...elements, ...generalBlocks]));
+    const cleanPassageEls = allPassageElements.filter(el => {
+      return !allPassageElements.some(other => other !== el && other.contains(el));
+    });
+
+    const passageMap = new Map(); // qNum -> passageText
+
+    cleanPassageEls.forEach(passageEl => {
+      const passageText = extractRichText(passageEl);
+      if (!passageText || passageText.length < 35) return;
+
+      // Tìm dải số câu hỏi, ví dụ: "from 13 to 16", "từ câu 13 đến 16", "blanks 13 to 16", "questions 31-36"
+      const rangeRegex = /(?:from|từ|câu|blanks?|questions?)\s*(?:câu\s*)?(\d+)\s*(?:to|đến|tới|-)\s*(?:câu\s*)?(\d+)/i;
+      const m = passageText.match(rangeRegex);
+      if (m) {
+        const startQ = parseInt(m[1], 10);
+        const endQ = parseInt(m[2], 10);
+        if (!isNaN(startQ) && !isNaN(endQ) && startQ <= endQ && (endQ - startQ) <= 25) {
+          for (let q = startQ; q <= endQ; q++) {
+            passageMap.set(q, passageText);
+          }
+          return;
+        }
+      }
+
+      // Nếu không ghi rõ số câu, gán cho các câu hỏi anh em cùng container/section cha
+      const parentSection = passageEl.closest('div[style*="margin-bottom"], section, .exam-section, .quiz-section, .ant-space, body');
+      if (parentSection && parentSection !== document.body) {
+        const siblingQuestionBoxes = Array.from(parentSection.querySelectorAll('.yh-question-card, [class*="question-card"], [id^="q-"], .que')).filter(isVisible);
+        siblingQuestionBoxes.forEach(qBox => {
+          const numElem = qBox.querySelector('.yh-question-stem__label, .yh-question-stem, [class*="question-stem"], .qno, .no, .q-number, b, strong');
+          if (numElem) {
+            const numMatch = numElem.textContent.match(/\d+/);
+            if (numMatch) {
+              const num = parseInt(numMatch[0], 10);
+              if (!isNaN(num) && !passageMap.has(num)) {
+                passageMap.set(num, passageText);
+              }
+            }
+          }
+        });
+      }
+    });
+
+    return passageMap;
+  }
+
   // Tầng 1: Quiz Containers (Moodle, Canvas, Subtt, Azota, Yourhomework...)
-  function extractQuizContainers() {
+  function extractQuizContainers(passageMap) {
     const containerSelectors = [
       '.que',
+      '.yh-question-card',
+      '[class*="yh-question-card"]',
+      '[class*="question-card"]',
+      '[id^="q-"]',
       '[id^="question-"]',
       '[id^="que-"]',
       '[class*="question-item"]',
@@ -245,21 +341,29 @@ function inPageExtractQA() {
 
     if (questionBoxes.length === 0) return null;
 
-    const results = [];
+    const questionsMap = new Map();
+
     questionBoxes.forEach((box, idx) => {
       let qNum = idx + 1;
-      const numElem = box.querySelector('.qno, .no, .info .no, .info .header, .q-number, .question-number, b, strong');
+      const numElem = box.querySelector(
+        '.yh-question-stem__label, .yh-question-stem, [class*="question-stem"], ' +
+        '.qno, .no, .info .no, .info .header, .q-number, .question-number, ' +
+        '[class*="question-num"], [class*="q-num"], h3, h4, h5'
+      );
       if (numElem) {
         const text = cleanText(numElem.textContent);
-        const matchNum = text.match(/\d+/);
+        const matchNum = text.match(/(?:question|câu|quest|q|bài)?\s*(\d+)/i);
         if (matchNum) {
-          const parsed = parseInt(matchNum[0], 10);
-          if (!isNaN(parsed)) qNum = parsed;
+          const parsed = parseInt(matchNum[1], 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 1000) qNum = parsed;
         }
       }
 
       let title = '';
-      const qtextEl = box.querySelector('.qtext, [class*="question-title"], [class*="question-text"], [class*="content-question"], .stem');
+      const qtextEl = box.querySelector(
+        '.yh-question-stem, [class*="question-stem"], .qtext, [class*="question-title"], ' +
+        '[class*="question-text"], [class*="content-question"], .stem'
+      );
       if (qtextEl) {
         const clone = qtextEl.cloneNode(true);
         clone.querySelectorAll('.accesshide, .sr-only, .sr-only-focusable, input, .ablock, .answer').forEach(el => el.remove());
@@ -267,11 +371,25 @@ function inPageExtractQA() {
       } else {
         const formEl = box.querySelector('.formulation') || box;
         const clone = formEl.cloneNode(true);
-        clone.querySelectorAll('.accesshide, .sr-only, .ablock, .answer, .r0, .r1, input, h4, .qtype_multichoice_clearchoice, [class*="option"], [class*="answer"]').forEach(el => el.remove());
+        clone.querySelectorAll(
+          '.accesshide, .sr-only, .ablock, .answer, .r0, .r1, input, h4, ' +
+          '.qtype_multichoice_clearchoice, [class*="option"], [class*="answer"], ' +
+          '.yh-mcq-options, .ant-radio-group'
+        ).forEach(el => el.remove());
         title = extractRichText(clone);
       }
 
       if (!title || title.length < 3) title = `Câu hỏi ${qNum}`;
+
+      // Nếu có bài đọc hiểu tương ứng, gắn kèm vào tiêu đề
+      if (passageMap && passageMap.has(qNum)) {
+        const passage = passageMap.get(qNum);
+        let baseTitle = title;
+        if (/^(?:câu|question|quest|q|bài)\s*\d+[\.\:\s]*$/i.test(baseTitle.trim())) {
+          baseTitle = `${baseTitle} (Chọn đáp án đúng nhất cho vị trí (${qNum}) hoặc câu hỏi này dựa trên bài đọc hiểu trên)`;
+        }
+        title = `[ĐỌC HIỂU / READING PASSAGE]:\n${passage}\n\n[NỘI DUNG CÂU HỎI]:\n${baseTitle}`;
+      }
 
       const imgSrc = extractImageUrl(qtextEl || box);
       const options = [];
@@ -295,20 +413,27 @@ function inPageExtractQA() {
 
           input.setAttribute('data-qa-for', qId);
           input.setAttribute('data-qa-opt', key);
-          if (input.parentElement) {
-            input.parentElement.setAttribute('data-qa-for', qId);
-            input.parentElement.setAttribute('data-qa-opt', key);
+          const wrapper = input.closest('label, .ant-radio-wrapper, .form-check') || input.parentElement;
+          if (wrapper) {
+            wrapper.setAttribute('data-qa-for', qId);
+            wrapper.setAttribute('data-qa-opt', key);
           }
+
+          const isChecked = input.checked || !!input.closest('.ant-radio-wrapper-checked, [class*="checked"]');
 
           options.push({
             key: key,
             text: optText,
             raw: `${key}. ${optText}`,
-            isChecked: input.checked
+            isChecked: isChecked
           });
         });
       } else {
-        const optionRows = Array.from(box.querySelectorAll('.answer > div, .answer > li, .ablock .r0, .ablock .r1, .form-check, [class*="option-item"], [class*="choice"]')).filter(isVisible);
+        const optionRows = Array.from(box.querySelectorAll(
+          '.yh-mcq-options > div, .ant-radio-wrapper, .answer > div, .answer > li, ' +
+          '.ablock .r0, .ablock .r1, .form-check, [class*="option-item"], [class*="choice"]'
+        )).filter(isVisible);
+
         optionRows.forEach((row, optIdx) => {
           if (row.querySelector('.qtype_multichoice_clearchoice') || row.classList.contains('qtype_multichoice_clearchoice')) return;
           let optRaw = cleanText(row.innerText || row.textContent);
@@ -336,7 +461,7 @@ function inPageExtractQA() {
       }
 
       if (options.length >= 2 || (title && title.length > 10)) {
-        results.push({
+        const qObj = {
           id: qId,
           num: qNum,
           index: idx + 1,
@@ -344,15 +469,28 @@ function inPageExtractQA() {
           image: imgSrc,
           options: options,
           selectedAnswer: options.find(o => o.isChecked)?.key || null
-        });
+        };
+
+        // Chống trùng lặp câu hỏi (Deduplication): giữ câu có options đầy đủ nhất hoặc có bài đọc hiểu
+        if (questionsMap.has(qNum)) {
+          const existing = questionsMap.get(qNum);
+          if (options.length > existing.options.length || (!existing.title.includes('[ĐỌC HIỂU') && title.includes('[ĐỌC HIỂU'))) {
+            questionsMap.set(qNum, qObj);
+          }
+        } else {
+          questionsMap.set(qNum, qObj);
+        }
       }
     });
 
+    const results = Array.from(questionsMap.values());
+    results.sort((a, b) => a.num - b.num);
+    results.forEach((q, i) => { q.index = i + 1; });
     return results.length > 0 ? results : null;
   }
 
   // Tầng 2: Heuristic tổng quát (Trang layout phẳng, không dùng class container)
-  function extractGenericDOMQuestions() {
+  function extractGenericDOMQuestions(passageMap) {
     const allElements = Array.from(document.body.querySelectorAll('*')).filter(el => {
       if (IGNORE_TAGS.has(el.tagName)) return false;
       const cls = (el.className || '').toString().toLowerCase();
@@ -401,6 +539,7 @@ function inPageExtractQA() {
 
       if (isSpamText(rawText)) continue;
 
+      // 1. Ảnh
       if (node.tagName === 'IMG' || (!rawText && imgSrc)) {
         if (currentQ && !currentQ.image && imgSrc) {
           currentQ.image = imgSrc;
@@ -408,9 +547,22 @@ function inPageExtractQA() {
         continue;
       }
 
+      // 2. Tiêu đề câu hỏi mới
       const qMatch = rawText.match(QUESTION_HEADER_REGEX);
       if (qMatch && !isSpamText(rawText)) {
         const qNum = parseInt(qMatch[1], 10);
+
+        // Bỏ qua timestamp (ví dụ 54:20)
+        if (/^\d+:\d+/.test(rawText) || rawText.includes('54:20')) continue;
+
+        // Nếu trùng qNum với câu đang tạo và câu đang tạo chưa có options/inputs, ghép vào title
+        if (currentQ && currentQ.num === qNum && currentQ.inputs.length === 0 && currentQ.optionNodes.length === 0) {
+          if (!currentQ.title.includes(rawText)) {
+            currentQ.title += ' ' + rawText;
+          }
+          continue;
+        }
+
         const qId = `qa-detected-${qNum}`;
         node.setAttribute('data-qa-id', qId);
 
@@ -428,17 +580,20 @@ function inPageExtractQA() {
 
       if (!currentQ) continue;
 
+      // 3. Thẻ INPUT radio/checkbox
       if (node.tagName === 'INPUT' && (node.type === 'radio' || node.type === 'checkbox')) {
         currentQ.inputs.push(node);
         continue;
       }
 
+      // 4. Text có tiền tố A, B, C, D
       const optMatch = rawText.match(OPTION_PREFIX_REGEX);
       if (optMatch && !isSpamText(rawText)) {
         currentQ.optionNodes.push({ node, key: optMatch[1].toUpperCase(), rawText });
         continue;
       }
 
+      // 5. Text thân bài câu hỏi
       if (currentQ.inputs.length === 0 && currentQ.optionNodes.length === 0 && rawText.length < 400 && !isSpamText(rawText)) {
         if (!currentQ.title.includes(rawText)) {
           currentQ.title += ' ' + rawText;
@@ -446,11 +601,14 @@ function inPageExtractQA() {
       }
     }
 
-    const results = [];
-    questionList.forEach((q, idx) => {
+    // Xử lý hoàn thiện từng câu hỏi và Deduplication
+    const questionsMap = new Map();
+
+    questionList.forEach((q) => {
       const options = [];
       const optionsMap = new Map();
 
+      // Trường hợp 1: Có các thẻ input radio/checkbox trực tiếp
       if (q.inputs.length >= 2) {
         q.inputs.forEach((input, optIdx) => {
           let containerText = cleanText(input.parentElement?.innerText || '');
@@ -468,23 +626,27 @@ function inPageExtractQA() {
 
           input.setAttribute('data-qa-for', q.id);
           input.setAttribute('data-qa-opt', key);
-          if (input.parentElement) {
-            input.parentElement.setAttribute('data-qa-for', q.id);
-            input.parentElement.setAttribute('data-qa-opt', key);
+          const wrapper = input.closest('label, .ant-radio-wrapper, .form-check') || input.parentElement;
+          if (wrapper) {
+            wrapper.setAttribute('data-qa-for', q.id);
+            wrapper.setAttribute('data-qa-opt', key);
           }
 
           if (!optionsMap.has(key)) {
+            const isChecked = input.checked || !!input.closest('.ant-radio-wrapper-checked, [class*="checked"]');
             const optObj = {
               key: key,
               text: optText,
               raw: `${key}. ${optText}`,
-              isChecked: input.checked
+              isChecked: isChecked
             };
             optionsMap.set(key, optObj);
             options.push(optObj);
           }
         });
-      } else if (q.optionNodes.length >= 2) {
+      }
+      // Trường hợp 2: Có các nút text mang tiền tố A, B, C, D
+      else if (q.optionNodes.length >= 2) {
         q.optionNodes.forEach(({ node, key, rawText }) => {
           const optText = stripOptionPrefix(rawText, key);
           if (!optText || isSpamText(optText)) return;
@@ -503,7 +665,9 @@ function inPageExtractQA() {
             options.push(optObj);
           }
         });
-      } else {
+      }
+      // Trường hợp 3: Đoạn text câu hỏi chứa inline options
+      else {
         const { title: cleanTitle, options: inlineOptions } = splitTextAndOptions(q.title);
         if (inlineOptions.length >= 2) {
           q.title = cleanTitle;
@@ -511,25 +675,47 @@ function inPageExtractQA() {
         }
       }
 
-      if (options.length > 0 || q.title.length > 8 || q.image) {
-        results.push({
+      let finalTitle = q.title;
+      if (passageMap && passageMap.has(q.num)) {
+        const passage = passageMap.get(q.num);
+        let baseTitle = finalTitle;
+        if (/^(?:câu|question|quest|q|bài)\s*\d+[\.\:\s]*$/i.test(baseTitle.trim())) {
+          baseTitle = `${baseTitle} (Chọn đáp án đúng nhất cho vị trí (${q.num}) hoặc câu hỏi này dựa trên bài đọc hiểu trên)`;
+        }
+        finalTitle = `[ĐỌC HIỂU / READING PASSAGE]:\n${passage}\n\n[NỘI DUNG CÂU HỎI]:\n${baseTitle}`;
+      }
+
+      if (options.length > 0 || finalTitle.length > 8 || q.image) {
+        const qObj = {
           id: q.id,
           num: q.num,
-          index: idx + 1,
-          title: q.title,
+          title: finalTitle,
           image: q.image,
           options: options.sort((a, b) => a.key.localeCompare(b.key)),
           selectedAnswer: options.find(o => o.isChecked)?.key || null
-        });
+        };
+
+        if (questionsMap.has(q.num)) {
+          const existing = questionsMap.get(q.num);
+          if (options.length > existing.options.length || (!existing.title.includes('[ĐỌC HIỂU') && finalTitle.includes('[ĐỌC HIỂU'))) {
+            questionsMap.set(q.num, qObj);
+          }
+        } else {
+          questionsMap.set(q.num, qObj);
+        }
       }
     });
 
+    const results = Array.from(questionsMap.values());
+    results.sort((a, b) => a.num - b.num);
+    results.forEach((q, i) => { q.index = i + 1; });
     return results;
   }
 
-  const lms = extractQuizContainers();
+  const passageMap = extractReadingPassages();
+  const lms = extractQuizContainers(passageMap);
   if (lms && lms.length > 0) return lms;
-  return extractGenericDOMQuestions();
+  return extractGenericDOMQuestions(passageMap);
 }
 
 // Tự động click chọn đáp án trên web (Đa tầng, chống miss 100%, tàng hình)
@@ -1223,9 +1409,19 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
 
       const title = document.createElement('div');
       title.className = 'q-text';
-      let displayTitle = (q.title || '').replace(/^(?:question|câu|câu\s*hỏi|bài|item|q)\s*\d+[\.\:\s\-]+/i, '').trim();
+      let displayTitle = (q.title || '');
+      if (!displayTitle.includes('[ĐỌC HIỂU')) {
+        displayTitle = displayTitle.replace(/^(?:question|câu|câu\s*hỏi|bài|item|q)\s*\d+[\.\:\s\-]+/i, '').trim();
+      }
       if (!displayTitle) displayTitle = q.title;
       title.textContent = displayTitle;
+      if (displayTitle.includes('[ĐỌC HIỂU')) {
+        title.style.whiteSpace = 'pre-wrap';
+        title.style.maxHeight = '200px';
+        title.style.overflowY = 'auto';
+        title.style.fontSize = '12px';
+        title.style.lineHeight = '1.4';
+      }
 
       const actions = document.createElement('div');
       actions.className = 'q-card-actions';
