@@ -1028,11 +1028,6 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
-
-      // Tự động quét và chọn đáp án câu mới ngay lập tức
-      setTimeout(() => {
-        triggerAutoSolveFromPage();
-      }, 300);
     } catch (e) {
       console.warn('[AutoSolver] Lỗi khi nạp trang mới:', e);
       window.location.reload();
@@ -1041,5 +1036,4 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
 
   console.log('%c[Q&A AutoSolver] Sẵn sàng! Nhấn Alt + H trên trang để tự động giải & chọn đáp án.', 'color: #10b981; font-weight: bold;');
   attachMoodleAjaxNavigation();
-  triggerAutoSolveFromPage();
 })();
