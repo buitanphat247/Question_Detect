@@ -992,14 +992,98 @@ function inPageHighlightQA(qaId) {
   return false;
 }
 
+// Bóc tách nội dung văn bản thuần của đề thi để gửi cho AI phân tích
+function inPageExtractCleanText() {
+  const clone = document.body.cloneNode(true);
+  clone.querySelectorAll('script, style, noscript, svg, nav, header, footer, iframe, select, textarea, audio, video, aside, .navbar, .sidebar, .menu, [class*="nav"], [class*="sidebar"], [class*="footer"]').forEach(el => el.remove());
+
+  const mainArea = clone.querySelector('main, #main, .main, [role="main"], .quiz-content, .exam-content, .paper-container, .ant-layout-content, #content, .content') || clone;
+
+  return (mainArea.innerText || mainArea.textContent || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Liên kết các câu hỏi AI bóc tách vào DOM trên trang web để tự động click chọn được
+function inPageMapAiQuestions(parsedQuestions) {
+  if (!parsedQuestions || parsedQuestions.length === 0) return false;
+
+  document.querySelectorAll('[data-qa-id], [data-qa-for], [data-qa-opt]').forEach(el => {
+    el.removeAttribute('data-qa-id');
+    el.removeAttribute('data-qa-for');
+    el.removeAttribute('data-qa-opt');
+  });
+
+  parsedQuestions.forEach(q => {
+    const qNum = q.num;
+    const qId = `qa-detected-ai-${qNum}`;
+
+    const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, div, p, span, b, strong')).filter(el => {
+      const txt = (el.innerText || el.textContent || '').trim();
+      if (txt.length > 300) return false;
+      const m = txt.match(/(?:question|câu|quest|q|bài)\s*(\d+)\b/i);
+      return m && parseInt(m[1], 10) === qNum;
+    });
+
+    let qCard = null;
+    if (allHeaders.length > 0) {
+      for (const h of allHeaders) {
+        let curr = h;
+        while (curr && curr !== document.body) {
+          if (curr.querySelectorAll('input[type="radio"], input[type="checkbox"]').length >= 2) {
+            qCard = curr;
+            break;
+          }
+          curr = curr.parentElement;
+        }
+        if (qCard) break;
+      }
+      if (!qCard && allHeaders[0]) {
+        qCard = allHeaders[0].closest('.yh-question-card, .que, .question-card, [id^="q-"], div') || allHeaders[0];
+      }
+    }
+
+    if (qCard) {
+      qCard.setAttribute('data-qa-id', qId);
+
+      const inputs = Array.from(qCard.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+      if (inputs.length >= 2) {
+        inputs.forEach((inp, idx) => {
+          const key = String.fromCharCode(65 + idx);
+          inp.setAttribute('data-qa-for', qId);
+          inp.setAttribute('data-qa-opt', key);
+          const wrapper = inp.closest('label, .ant-radio-wrapper, .form-check') || inp.parentElement;
+          if (wrapper) {
+            wrapper.setAttribute('data-qa-for', qId);
+            wrapper.setAttribute('data-qa-opt', key);
+          }
+        });
+      } else {
+        const rows = Array.from(qCard.querySelectorAll('label, .ant-radio-wrapper, [class*="option"], .answer > div, li'));
+        rows.forEach((row, idx) => {
+          const key = String.fromCharCode(65 + idx);
+          row.setAttribute('data-qa-for', qId);
+          row.setAttribute('data-qa-opt', key);
+        });
+      }
+    }
+  });
+
+  return true;
+}
+
 // Logic giao diện Popup
 document.addEventListener('DOMContentLoaded', async () => {
   const btnScan = document.getElementById('btnScan');
+  const btnScanAI = document.getElementById('btnScanAI');
   const btnSolveAll = document.getElementById('btnSolveAll');
   const btnToggleSettings = document.getElementById('btnToggleSettings');
   const settingsPanel = document.getElementById('settingsPanel');
   const txtApiKey = document.getElementById('txtApiKey');
   const txtModel = document.getElementById('txtModel');
+  const txtModelDetect = document.getElementById('txtModelDetect');
   const btnSaveKey = document.getElementById('btnSaveKey');
   const chkAutoSelectWeb = document.getElementById('chkAutoSelectWeb');
   const searchInput = document.getElementById('searchInput');
@@ -1015,15 +1099,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnDownload = document.getElementById('btnDownload');
 
   const DEFAULT_API_KEY = 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
-  const DEFAULT_MODEL = 'gpt-5.5';
+  const DEFAULT_MODEL = 'gpt-5.4-nano';
+  const DEFAULT_DETECT_MODEL = 'gpt-5.4-nano';
 
   let allQuestions = [];
   let activeTabId = null;
 
   // Tải cài đặt đã lưu (hoặc dùng mặc định đã cài sẵn)
-  chrome.storage.local.get(['key4uApiKey', 'key4uModel', 'autoSelectWeb'], (res) => {
+  chrome.storage.local.get(['key4uApiKey', 'key4uModel', 'key4uModelDetect', 'autoSelectWeb'], (res) => {
     txtApiKey.value = res.key4uApiKey || DEFAULT_API_KEY;
     txtModel.value = res.key4uModel || DEFAULT_MODEL;
+    txtModelDetect.value = res.key4uModelDetect || DEFAULT_DETECT_MODEL;
     if (typeof res.autoSelectWeb !== 'undefined') {
       chkAutoSelectWeb.checked = res.autoSelectWeb;
     } else {
@@ -1034,6 +1120,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.storage.local.set({
         key4uApiKey: DEFAULT_API_KEY,
         key4uModel: DEFAULT_MODEL,
+        key4uModelDetect: DEFAULT_DETECT_MODEL,
         autoSelectWeb: true
       });
     }
@@ -1043,11 +1130,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnSaveKey.addEventListener('click', () => {
     const apiKey = txtApiKey.value.trim() || DEFAULT_API_KEY;
     const model = txtModel.value.trim() || DEFAULT_MODEL;
+    const detectModel = txtModelDetect.value.trim() || DEFAULT_DETECT_MODEL;
     const autoSelect = chkAutoSelectWeb.checked;
 
     chrome.storage.local.set({
       key4uApiKey: apiKey,
       key4uModel: model,
+      key4uModelDetect: detectModel,
       autoSelectWeb: autoSelect
     }, () => {
       showToast('Đã lưu cấu hình Key4U!');
@@ -1058,7 +1147,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     settingsPanel.classList.toggle('hidden');
   });
 
-  // Quét trang
+  function setScanningState(isScanning) {
+    const icon = btnScan.querySelector('.icon-spin-target');
+    const text = btnScan.querySelector('span');
+    if (isScanning) {
+      icon.classList.add('spin');
+      text.textContent = 'Đang quét...';
+      btnScan.disabled = true;
+    } else {
+      icon.classList.remove('spin');
+      text.textContent = 'Quét DOM';
+      btnScan.disabled = false;
+    }
+  }
+
+  function setAIScanningState(isScanning) {
+    const icon = btnScanAI.querySelector('.icon-ai-spin');
+    const text = btnScanAI.querySelector('span');
+    if (isScanning) {
+      icon.classList.add('spin');
+      text.textContent = 'AI phân tích...';
+      btnScanAI.disabled = true;
+      btnScan.disabled = true;
+    } else {
+      icon.classList.remove('spin');
+      text.textContent = '🧠 Quét AI';
+      btnScanAI.disabled = false;
+      btnScan.disabled = false;
+    }
+  }
+
+  // Quét DOM nội bộ
   async function performScan() {
     setScanningState(true);
     try {
@@ -1077,7 +1196,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       let scanResults = null;
-      // 1. Thử qua sendMessage tới content script trước
       try {
         const resp = await new Promise((resolve) => {
           chrome.tabs.sendMessage(tab.id, { action: 'SCAN_QUESTIONS' }, (res) => {
@@ -1090,7 +1208,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       } catch (e) {}
 
-      // 2. Nếu sendMessage chưa có kết quả (tab chưa nạp content script), chạy trực tiếp executeScript
       if (!scanResults || scanResults.length === 0) {
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
@@ -1108,7 +1225,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderQuestions(allQuestions);
         showToast(`Đã nhận diện chuẩn xác ${allQuestions.length} câu hỏi!`);
       } else {
-        showToast('Không tìm thấy câu hỏi nào trên trang!', true);
+        showToast('Không tìm thấy câu hỏi nào trên trang! Hãy thử Quét bằng AI.', true);
       }
     } catch (err) {
       setScanningState(false);
@@ -1116,7 +1233,163 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Quét bằng AI (gpt-5.4-nano) - Bóc tách bài đọc hiểu và cấu trúc đề 100% chuẩn
+  async function performAIScan() {
+    const apiKey = txtApiKey.value.trim() || DEFAULT_API_KEY;
+    const detectModel = txtModelDetect.value.trim() || DEFAULT_DETECT_MODEL;
+
+    if (!apiKey) {
+      settingsPanel.classList.remove('hidden');
+      txtApiKey.focus();
+      return showToast('Vui lòng nhập Key4U API Key trước!', true);
+    }
+
+    setAIScanningState(true);
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        showToast('Không tìm thấy tab hiện tại!', true);
+        setAIScanningState(false);
+        return;
+      }
+      activeTabId = tab.id;
+
+      if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:'))) {
+        showToast('Không thể quét trên trang cấu hình trình duyệt!', true);
+        setAIScanningState(false);
+        return;
+      }
+
+      showToast(`Đang trích xuất văn bản trang...`);
+
+      const execResults = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: inPageExtractCleanText
+      });
+
+      const pageText = (execResults && execResults[0] && execResults[0].result) ? execResults[0].result : '';
+      if (!pageText || pageText.length < 50) {
+        setAIScanningState(false);
+        return showToast('Không tìm thấy văn bản đề thi trên trang!', true);
+      }
+
+      showToast(`AI (${detectModel}) đang phân tích cấu trúc đề thi...`);
+
+      const prompt = `Bạn là chuyên gia bóc tách cấu trúc đề thi trắc nghiệm siêu chuẩn xác.
+Hãy đọc kỹ văn bản đề thi dưới đây và trích xuất TOÀN BỘ các câu hỏi trắc nghiệm thành một mảng JSON hợp lệ.
+
+CÁC NGUYÊN TẮC BẮT BUỘC:
+1. ĐOẠN VĂN ĐỌC HIỂU (Reading passage, Announcement, Đoạn văn điền từ, Dữ liệu chung...):
+   - Nếu có đoạn văn dùng chung cho một nhóm câu (ví dụ: từ câu 13 đến 16, hoặc bài đọc 31-36...), BẮT BUỘC phải trích xuất TOÀN BỘ nội dung bài đọc đó vào trường "passage" của tất cả các câu hỏi thuộc nhóm đó!
+   - Nếu là câu hỏi độc lập bình thường không có bài đọc hiểu, để "passage": null.
+2. BỎ QUA CÁC THÀNH PHẦN RÁC:
+   - Đồng hồ đếm ngược (ví dụ 54:20), bảng danh sách câu hỏi, điểm số (ví dụ Điểm: 0.25), nút nộp bài, thông tin người dùng.
+3. CẤU TRÚC MỖI CÂU HỎI TRONG MẢNG:
+   - "num": số thứ tự câu hỏi (số nguyên, ví dụ 1, 2, 13...)
+   - "title": đề bài câu hỏi (hoặc câu hỏi ngắn, KHÔNG bao gồm bài đọc hiểu chung)
+   - "passage": nội dung đoạn văn đọc hiểu chung (nếu có, hoặc null)
+   - "options": mảng các lựa chọn, mỗi phần tử là {"key": "A"|"B"|"C"|"D", "text": "nội dung đáp án đã bỏ tiền tố A/B/C/D và bỏ điểm số"}
+
+ĐỊNH DẠNG ĐẦU RA:
+Chỉ trả về DUY NHẤT một khối JSON hợp lệ dạng:
+[
+  {
+    "num": 1,
+    "passage": null,
+    "title": "Nội dung câu hỏi...",
+    "options": [
+      { "key": "A", "text": "..." },
+      { "key": "B", "text": "..." }
+    ]
+  }
+]
+
+VĂN BẢN ĐỀ THI:
+${pageText.slice(0, 45000)}`;
+
+      const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: detectModel,
+          messages: [
+            { role: 'system', content: 'You are an expert exam structure parser. Always reply with only a valid JSON array.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Key4U API lỗi (${res.status}): ${errText.slice(0, 120)}`);
+      }
+
+      const data = await res.json();
+      let rawJson = data.choices[0]?.message?.content?.trim() || '[]';
+      const m = rawJson.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      if (m) rawJson = m[0];
+
+      const parsedQuestions = JSON.parse(rawJson);
+      if (!Array.isArray(parsedQuestions) || parsedQuestions.length === 0) {
+        throw new Error('AI không tìm thấy cấu trúc câu hỏi nào trong văn bản!');
+      }
+
+      // Liên kết các câu hỏi AI bóc tách vào DOM trên trang web để tự động click chọn được
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: inPageMapAiQuestions,
+          args: [parsedQuestions]
+        });
+      } catch (e) {
+        console.warn('Map DOM failed:', e);
+      }
+
+      // Chuẩn hóa thành allQuestions để render
+      allQuestions = parsedQuestions.map((item, idx) => {
+        let finalTitle = item.title || `Câu hỏi ${item.num || (idx + 1)}`;
+        if (item.passage) {
+          finalTitle = `[ĐỌC HIỂU / READING PASSAGE]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
+        }
+        const qNum = typeof item.num === 'number' ? item.num : (idx + 1);
+        const qId = `qa-detected-ai-${qNum}`;
+        const options = (item.options || []).map((o, optIdx) => {
+          const key = (o.key || String.fromCharCode(65 + optIdx)).toUpperCase();
+          const optText = (o.text || '').trim();
+          return {
+            key: key,
+            text: optText,
+            raw: `${key}. ${optText}`,
+            isChecked: false
+          };
+        });
+
+        return {
+          id: qId,
+          num: qNum,
+          index: idx + 1,
+          title: finalTitle,
+          image: null,
+          options: options,
+          selectedAnswer: null
+        };
+      });
+
+      setAIScanningState(false);
+      renderQuestions(allQuestions);
+      showToast(`🧠 AI (${detectModel}) đã bóc tách chuẩn xác ${allQuestions.length} câu hỏi!`);
+    } catch (err) {
+      setAIScanningState(false);
+      showToast('Lỗi khi quét AI: ' + err.message, true);
+    }
+  }
+
   btnScan.addEventListener('click', performScan);
+  btnScanAI.addEventListener('click', performAIScan);
 
   // Gọi Key4U API giải 1 câu hỏi
   async function solveQuestionWithAI(q) {

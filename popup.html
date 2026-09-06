@@ -41,18 +41,26 @@
 
     <!-- Main Action Bar -->
     <div class="action-bar">
-      <button id="btnScan" class="btn btn-secondary">
-        <svg class="icon-spin-target" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2">
+      <button id="btnScan" class="btn btn-secondary" title="Quét nhanh cấu trúc thẻ DOM (miễn phí, tức thì)">
+        <svg class="icon-spin-target" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2">
           <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
         </svg>
-        <span>Quét trang</span>
+        <span>Quét DOM</span>
+      </button>
+
+      <button id="btnScanAI" class="btn btn-ai-scan" title="Dùng AI (gpt-5.4-nano) bóc tách toàn bộ cấu trúc bài đọc, đề bài & options chuẩn 100%">
+        <svg class="icon-ai-spin" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"></path>
+          <circle cx="12" cy="12" r="4"></circle>
+        </svg>
+        <span>🧠 Quét AI</span>
       </button>
 
       <button id="btnSolveAll" class="btn btn-ai" title="Dùng AI giải toàn bộ và tự động chọn đáp án trên web">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
         </svg>
-        <span>AI Giải & Tự Chọn</span>
+        <span>Giải & Chọn</span>
       </button>
     </div>
 
@@ -73,8 +81,13 @@
       </div>
 
       <div class="form-group">
-        <label for="txtModel">Model AI:</label>
-        <input type="text" id="txtModel" value="gpt-5.5" placeholder="gpt-5.5, gpt-4o, v.v.">
+        <label for="txtModel">Model AI Giải đề:</label>
+        <input type="text" id="txtModel" value="gpt-5.4-nano" placeholder="gpt-5.4-nano, gpt-5.6-luna, gpt-5.5...">
+      </div>
+
+      <div class="form-group">
+        <label for="txtModelDetect">Model AI Bóc tách Cấu trúc:</label>
+        <input type="text" id="txtModelDetect" value="gpt-5.4-nano" placeholder="gpt-5.4-nano, gpt-5.6-luna...">
       </div>
 
       <div class="setting-item">
