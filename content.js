@@ -1486,9 +1486,9 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      {
        "num": 1,
        "type": "single_choice",
-       "passage": null,
+       "passage": "Nội dung bài đọc hiểu, đoạn văn hoặc bảng số liệu nếu có (hoặc null nếu là câu hỏi độc lập)",
        "image": "url_ảnh_nếu_có_hoặc_null",
-       "title": "Nội dung câu hỏi...",
+       "title": "CHỈ ghi câu hỏi cụ thể (ví dụ: 'What does \"they\" refer to?'). TUYỆT ĐỐI KHÔNG lặp lại bài đọc/passage vào trường title!",
        "options": [
          { "key": "A", "text": "nội dung đáp án A..." },
          { "key": "B", "text": "nội dung đáp án B..." }
@@ -1498,9 +1498,9 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      {
        "num": 27,
        "type": "true_false_group",
-       "passage": "nội dung đoạn tư liệu... nếu có hoặc null",
+       "passage": "Nội dung bài đọc hiểu, đoạn tư liệu hoặc bảng số liệu nếu có (hoặc null)",
        "image": "url_ảnh_nếu_có_hoặc_null",
-       "title": "đề bài chung (ví dụ: Cho đoạn tư liệu sau đây:)",
+       "title": "Yêu cầu câu hỏi (ví dụ: 'Cho đoạn tư liệu sau đây:'). TUYỆT ĐỐI KHÔNG lặp lại toàn bộ tư liệu vào title nếu đã đưa vào passage!",
        "items": [
          { "key": "A", "statement": "mệnh đề A..." },
          { "key": "B", "statement": "mệnh đề B..." },
@@ -1556,10 +1556,37 @@ ${pageText.slice(0, 45000)}`;
       const isTF = item.type === 'true_false_group' || (item.items && item.items.length > 0);
       const detectedImage = imageMap[qNum] || item.image || null;
 
-      let finalTitle = item.title || `Câu hỏi ${qNum}`;
-      if (item.passage) {
-        finalTitle = `[ĐỌC HIỂU / TƯ LIỆU]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
+      let rawTitle = (item.title || `Câu hỏi ${qNum}`).trim();
+      let passageText = (item.passage || '').trim() || null;
+
+      // Tách riêng biệt bài đọc hiểu và câu hỏi, TUYỆT ĐỐI không gộp đoạn văn vào title
+      if (rawTitle.includes('[NỘI DUNG CÂU HỎI]:')) {
+        const parts = rawTitle.split('[NỘI DUNG CÂU HỎI]:');
+        const pPart = parts[0].replace(/^\[(?:ĐỌC HIỂU|TƯ LIỆU)[^\]]*\]\s*:\s*/i, '').trim();
+        if (pPart && !passageText) passageText = pPart;
+        rawTitle = parts[1].trim();
+      } else if (rawTitle.startsWith('[ĐỌC HIỂU') || rawTitle.startsWith('[TƯ LIỆU')) {
+        rawTitle = rawTitle.replace(/^\[(?:ĐỌC HIỂU|TƯ LIỆU)[^\]]*\]\s*:\s*/i, '').trim();
+        if (passageText && rawTitle.startsWith(passageText)) {
+          rawTitle = rawTitle.slice(passageText.length).trim();
+        }
       }
+
+      if (passageText && rawTitle.startsWith(passageText)) {
+        rawTitle = rawTitle.slice(passageText.length).trim();
+      }
+
+      const groupMatch = rawTitle.match(/^((?:question|câu)\s*\d+\s*[\-\–]\s*\d+[\.\:\s\-]+[^\n]*)\n+([\s\S]*)$/i);
+      if (groupMatch) {
+        if (!passageText) {
+          passageText = groupMatch[1].trim();
+        }
+        rawTitle = groupMatch[2].trim();
+      }
+
+      rawTitle = rawTitle.replace(/^(?:question|câu|câu\s*hỏi|bài|item|q)\s*\d+[\.\:\s\-]+/i, '').trim();
+      if (!rawTitle) rawTitle = item.title || `Câu hỏi ${qNum}`;
+      const finalTitle = rawTitle;
 
       if (isTF) {
         const tfItems = (item.items || []).map((it, itIdx) => {
