@@ -117,23 +117,33 @@ async function solveWithKey4U(prompt, model, apiKey) {
   const data = await res.json();
   const content = data.choices?.[0]?.message?.content || '';
 
-  let parsed = null;
-  try {
-    const jsonMatch = content.match(/\{[\s\S]*?\}/);
-    if (jsonMatch) {
-      parsed = JSON.parse(jsonMatch[0]);
+  function extractJsonFromText(text) {
+    if (!text) return null;
+    let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
+      try { return JSON.parse(jsonStr); } catch (e) {}
     }
-  } catch (e) {
+    try { return JSON.parse(cleaned); } catch (e) {}
+    return null;
+  }
+
+  let parsed = extractJsonFromText(content);
+  if (!parsed) {
     const match = content.match(/([A-H])[\.\)\:]/i) || content.match(/\b([A-H])\b/i);
     if (match) {
       parsed = { answer: match[1].toUpperCase(), explanation: content };
     }
   }
 
-  if (!parsed || !parsed.answer) {
+  if (!parsed || (!parsed.answer && !parsed.answers)) {
     throw new Error('AI không trả về đáp án rõ ràng.');
   }
 
-  parsed.answer = parsed.answer.toUpperCase().trim();
+  if (parsed.answer) {
+    parsed.answer = parsed.answer.toUpperCase().trim();
+  }
   return parsed;
 }

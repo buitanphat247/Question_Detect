@@ -811,14 +811,17 @@
       } catch (e) {}
     }
 
-    // 1. Click vào LABEL trước (Cơ chế native chuẩn nhất của mọi trình duyệt)
-    if (label && typeof label.click === 'function') {
+    // Ưu tiên click LABEL hoặc INPUT với đầy đủ mousedown, mouseup, click
+    const clickTarget = label || input || wrapperEl;
+    if (clickTarget) {
       try {
-        label.click();
+        clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        clickTarget.click();
       } catch (e) {}
     }
 
-    // 2. Đảm bảo INPUT được set checked và bắn event chuẩn
+    // Đảm bảo INPUT được set checked và bắn event chuẩn
     if (input && input.tagName === 'INPUT') {
       try {
         if (!input.checked) {
@@ -834,32 +837,19 @@
       }
 
       try {
-        input.click();
-      } catch (e) {}
-
-      try {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
       } catch (e) {}
     }
 
-    // 3. Nếu vẫn chưa checked và wrapper khác label/input, thử click wrapper
-    if (wrapperEl && wrapperEl !== label && wrapperEl !== input) {
-      if (!input || !input.checked) {
-        try {
-          wrapperEl.click();
-        } catch (e) {}
-      }
-    }
-
-    // 4. Xóa sạch mọi bôi đen/selection để tuyệt đối không bị lộ
+    // Xóa sạch mọi bôi đen/selection
     try {
       if (window.getSelection) {
         window.getSelection().removeAllRanges();
       }
     } catch (e) {}
 
-    return input ? input.checked : true;
+    return true;
   }
 
   /**
@@ -920,26 +910,51 @@
       if (tfMatch) {
         const subKey = tfMatch[1].toUpperCase();
         const wantTrue = tfMatch[2].toUpperCase() === 'TRUE';
-        const tfRows = Array.from(container.querySelectorAll('.yh-tf4-row, .ant-space-item, tr, div')).filter(r => {
-          const inps = r.querySelectorAll('input[type="radio"], input[type="checkbox"]');
-          return inps.length >= 2;
-        });
+        
+        let tfRows = Array.from(container.querySelectorAll('.yh-tf4-row'));
+        if (tfRows.length === 0) {
+          tfRows = Array.from(container.querySelectorAll('.ant-space-item')).filter(r => r.querySelectorAll('input[type="radio"], input[type="checkbox"]').length === 2);
+        }
+        if (tfRows.length === 0) {
+          tfRows = Array.from(container.querySelectorAll('tr')).filter(r => r.querySelectorAll('input[type="radio"], input[type="checkbox"]').length === 2);
+        }
+        if (tfRows.length === 0) {
+          const divs = Array.from(container.querySelectorAll('div, li, fieldset'));
+          tfRows = divs.filter(r => {
+            const inps = r.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+            return inps.length === 2 && !Array.from(r.children).some(c => c.querySelectorAll('input[type="radio"], input[type="checkbox"]').length === 2);
+          });
+        }
 
         for (let rIdx = 0; rIdx < tfRows.length; rIdx++) {
           const row = tfRows[rIdx];
-          const rowText = cleanText(row.innerText || '');
+          const rowText = cleanText(row.innerText || row.textContent || '');
           const keyElem = row.querySelector('.yh-tf4-stem__key, .key, b, strong');
-          const keyMatch = rowText.match(/^[A-D][\.\)]/i);
-          const rowKey = keyElem ? (keyElem.innerText || '').replace(/[^A-D]/gi, '').toUpperCase() : (keyMatch ? keyMatch[0].charAt(0).toUpperCase() : String.fromCharCode(65 + rIdx));
+          let rowKey = String.fromCharCode(65 + rIdx);
+          if (keyElem) {
+            const m = (keyElem.innerText || keyElem.textContent || '').match(/([A-D])/i);
+            if (m) rowKey = m[1].toUpperCase();
+          } else {
+            const m = rowText.match(/(?:^|\s)([A-D])[\.\)]/i);
+            if (m) rowKey = m[1].toUpperCase();
+          }
 
           if (rowKey === subKey) {
-            const targetCont = wantTrue
-              ? (row.querySelector('.yh-tf4-true') || Array.from(row.querySelectorAll('label, div')).find(el => /\bđúng\b|\btrue\b/i.test(el.innerText || '')))
-              : (row.querySelector('.yh-tf4-false') || Array.from(row.querySelectorAll('label, div')).find(el => /\bsai\b|\bfalse\b/i.test(el.innerText || '')));
+            const inps = Array.from(row.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+            let targetInp = null;
+            let targetCont = null;
 
-            const inps = row.querySelectorAll('input[type="radio"], input[type="checkbox"]');
-            const targetInp = targetCont ? findRadioInput(targetCont) : (wantTrue ? inps[0] : inps[1]);
-            if (forceClickTarget(targetInp, targetCont || row)) return true;
+            if (wantTrue) {
+              targetCont = row.querySelector('.yh-tf4-true') || Array.from(row.querySelectorAll('label, div, span')).find(el => /\bđúng\b|\btrue\b/i.test(el.innerText || ''));
+              targetInp = targetCont ? (targetCont.tagName === 'INPUT' ? targetCont : targetCont.querySelector('input')) : inps[0];
+            } else {
+              targetCont = row.querySelector('.yh-tf4-false') || Array.from(row.querySelectorAll('label, div, span')).find(el => /\bsai\b|\bfalse\b/i.test(el.innerText || ''));
+              targetInp = targetCont ? (targetCont.tagName === 'INPUT' ? targetCont : targetCont.querySelector('input')) : (inps[1] || inps[inps.length - 1]);
+            }
+
+            if (targetInp || targetCont) {
+              return forceClickTarget(targetInp, targetCont || row);
+            }
           }
         }
       }
@@ -1368,8 +1383,9 @@ Hãy đọc kỹ văn bản đề thi dưới đây và trích xuất TOÀN BỘ
 
 CÁC NGUYÊN TẮC BẮT BUỘC:
 1. PHÂN BIỆT RÕ 2 DẠNG CÂU HỎI ("type"):
-   - Dạng 1: "single_choice" - Câu trắc nghiệm thông thường (chọn 1 trong 4 đáp án A, B, C, D).
-   - Dạng 2: "true_false_group" - Dạng Đúng / Sai 4 ý (Phần II theo form mới Bộ GD&ĐT), mỗi câu có 4 mệnh đề A, B, C, D (hoặc a, b, c, d) và mỗi mệnh đề có 2 lựa chọn Đúng / Sai.
+   - Dạng 1: "single_choice" - Câu trắc nghiệm chọn 1 đáp án (có thể có 2, 3 hoặc 4 phương án như A, B, C hoặc A, B, C, D).
+     CHÚ Ý CỰC KỲ QUAN TRỌNG: CHỈ trích xuất các phương án THỰC SỰ CÓ trong đề thi! Nếu câu hỏi chỉ có 3 đáp án A, B, C thì CHỈ tạo đúng 3 phần tử A, B, C trong mảng options, TUYỆT ĐỐI KHÔNG tự thêm phương án D rỗng hoặc gán text rỗng!
+   - Dạng 2: "true_false_group" - Dạng Đúng / Sai (Phần II theo form mới Bộ GD&ĐT), mỗi câu có các mệnh đề A, B, C, D (hoặc a, b, c, d) và mỗi mệnh đề có 2 lựa chọn Đúng / Sai.
 
 2. ĐOẠN VĂN ĐỌC HIỂU / ĐOẠN TƯ LIỆU DÙNG CHUNG ("passage"):
    - Nếu có đoạn văn đọc hiểu, đoạn tư liệu dùng chung cho một nhóm câu (hoặc 1 câu):
@@ -1485,16 +1501,21 @@ ${pageText.slice(0, 45000)}`;
         };
       }
 
-      const options = (item.options || []).map((o, optIdx) => {
-        const key = (o.key || String.fromCharCode(65 + optIdx)).toUpperCase();
-        const optText = (o.text || '').trim();
-        return {
-          key: key,
-          text: optText,
-          raw: `${key}. ${optText}`,
-          isChecked: false
-        };
-      });
+      const options = (item.options || [])
+        .filter(o => {
+          const txt = (o.text || o.statement || o.raw || '').trim();
+          return txt.length > 0 && txt !== '_' && txt !== '...' && txt !== '-';
+        })
+        .map((o, optIdx) => {
+          const key = (o.key || String.fromCharCode(65 + optIdx)).toUpperCase();
+          const optText = (o.text || o.statement || '').trim();
+          return {
+            key: key,
+            text: optText,
+            raw: `${key}. ${optText}`,
+            isChecked: false
+          };
+        });
 
       return {
         id: qId,
@@ -1631,6 +1652,19 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
               });
             }
 
+            function extractJsonFromText(text) {
+              if (!text) return null;
+              let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+              const firstBrace = cleaned.indexOf('{');
+              const lastBrace = cleaned.lastIndexOf('}');
+              if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
+                try { return JSON.parse(jsonStr); } catch (e) {}
+              }
+              try { return JSON.parse(cleaned); } catch (e) {}
+              return null;
+            }
+
             if (!resp || !resp.success) {
               const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
                 method: 'POST',
@@ -1647,19 +1681,20 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
               if (res.ok) {
                 const data = await res.json();
                 const content = data.choices?.[0]?.message?.content || '';
-                const m = content.match(/\{[\s\S]*?\}/);
-                if (m) resp = { success: true, data: JSON.parse(m[0]) };
+                const parsed = extractJsonFromText(content);
+                if (parsed) resp = { success: true, data: parsed };
               }
             }
 
             if (resp && resp.success && resp.data && resp.data.answers) {
-              const ans = resp.data.answers;
-              for (const subKey of ['A', 'B', 'C', 'D']) {
-                if (ans[subKey]) {
-                  const isTrue = /đúng|true/i.test(ans[subKey]);
-                  const targetKey = isTrue ? `${subKey}_TRUE` : `${subKey}_FALSE`;
-                  autoSelectAnswerOnPage(q.id, targetKey, isTrue ? 'Đúng' : 'Sai');
-                }
+              const ans = {};
+              Object.entries(resp.data.answers || {}).forEach(([k, v]) => {
+                ans[k.toUpperCase().trim()] = v;
+              });
+              for (const subKey of Object.keys(ans)) {
+                const isTrue = /đúng|true/i.test(String(ans[subKey]));
+                const targetKey = isTrue ? `${subKey}_TRUE` : `${subKey}_FALSE`;
+                autoSelectAnswerOnPage(q.id, targetKey, isTrue ? 'Đúng' : 'Sai');
               }
               successCount++;
               console.log(`[AutoSolver Stealth] Đã giải câu Đúng/Sai ${q.num || i + 1} (${successCount}/${questions.length})`);
