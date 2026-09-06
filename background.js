@@ -82,18 +82,38 @@ chrome.commands.onCommand.addListener(async (command) => {
 // Lắng nghe yêu cầu gọi API từ content script hoặc popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'CALL_KEY4U_AI') {
-    solveWithKey4U(request.prompt, request.model, request.apiKey)
+    solveWithKey4U(request.prompt, request.model, request.apiKey, request.imageUrl)
       .then(res => sendResponse({ success: true, data: res }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // Giữ kết nối async
   }
 });
 
-async function solveWithKey4U(prompt, model, apiKey) {
+async function solveWithKey4U(prompt, model, apiKey, imageUrl) {
   const key = apiKey || DEFAULT_API_KEY;
   const m = model || DEFAULT_MODEL;
 
-  const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+  let messages = [
+    { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' }
+  ];
+
+  const hasVisionImage = imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://') || imageUrl.startsWith('data:image/'));
+  if (hasVisionImage) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: imageUrl } }
+      ]
+    });
+  } else {
+    messages.push({
+      role: 'user',
+      content: prompt
+    });
+  }
+
+  let res = await fetch('https://api.key4u.vn/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -101,13 +121,28 @@ async function solveWithKey4U(prompt, model, apiKey) {
     },
     body: JSON.stringify({
       model: m,
-      messages: [
-        { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
-        { role: 'user', content: prompt }
-      ],
+      messages: messages,
       temperature: 0.1
     })
   });
+
+  if (!res.ok && hasVisionImage) {
+    res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify({
+        model: m,
+        messages: [
+          { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.1
+      })
+    });
+  }
 
   if (!res.ok) {
     const errBody = await res.text();

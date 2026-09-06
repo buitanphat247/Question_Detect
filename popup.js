@@ -1055,19 +1055,57 @@ function inPageHighlightQA(qaId) {
 function inPageExtractCleanText() {
   const clone = document.body.cloneNode(true);
 
-  // Đánh dấu ảnh bằng marker văn bản để AI nhận biết có hình ảnh/sơ đồ
+  // 1. Loại bỏ các nút điều khiển media, nút zoom ảnh, phân trang, cờ đánh dấu
+  clone.querySelectorAll('.yh-player-media__image-controls, .yh-player-media__audio-controls, button, .ant-btn, [class*="controls"], [class*="btn"], .ant-divider, .yh-question-action, .anticon-flag').forEach(el => el.remove());
+
+  // 2. Chuyển đổi các thẻ <table> thành định dạng Markdown table rõ ràng để AI đọc hiểu dữ liệu
+  clone.querySelectorAll('table').forEach(tbl => {
+    try {
+      const rows = Array.from(tbl.querySelectorAll('tr'));
+      if (rows.length === 0) return;
+
+      const mdRows = [];
+      let maxCols = 0;
+
+      rows.forEach((tr, rIdx) => {
+        const cells = Array.from(tr.querySelectorAll('th, td')).map(td => {
+          return (td.innerText || td.textContent || '').replace(/[\r\n\t]+/g, ' ').trim();
+        });
+        if (cells.length > 0) {
+          if (cells.length > maxCols) maxCols = cells.length;
+          mdRows.push(`| ${cells.join(' | ')} |`);
+          if (rIdx === 0) {
+            const divider = cells.map(() => '---').join(' | ');
+            mdRows.push(`| ${divider} |`);
+          }
+        }
+      });
+
+      if (mdRows.length > 0) {
+        const tableText = `\n\n[BẢNG THÔNG TIN / DỮ LIỆU]:\n${mdRows.join('\n')}\n\n`;
+        const marker = document.createTextNode(tableText);
+        tbl.parentNode?.replaceChild(marker, tbl);
+      }
+    } catch (e) {}
+  });
+
+  // 3. Đánh dấu ảnh bằng marker văn bản để AI nhận biết có hình ảnh/sơ đồ (đặc biệt là section media/notice)
   clone.querySelectorAll('img').forEach(img => {
     const src = img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
     if (src && src.length > 10) {
       const lower = src.toLowerCase();
       if (!lower.includes('avatar') && !lower.includes('icon.php') && !lower.includes('/pix/') && !lower.includes('favicon') && !lower.includes('logo')) {
-        const marker = document.createTextNode(`\n[HÌNH ẢNH: ${src}]\n`);
+        const isSectionMedia = !!img.closest('.yh-player-media, .yh-player-media--section, [class*="section-media"], [class*="player-media"]');
+        const markerText = isSectionMedia
+          ? `\n[HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO CHO CÂU HỎI TIẾP THEO: ${src}]\n`
+          : `\n[HÌNH ẢNH: ${src}]\n`;
+        const marker = document.createTextNode(markerText);
         img.parentNode?.replaceChild(marker, img);
       }
     }
   });
 
-  // Đánh dấu sơ đồ hình học SVG bằng marker văn bản
+  // 4. Đánh dấu sơ đồ hình học SVG bằng marker văn bản
   clone.querySelectorAll('svg').forEach(svg => {
     const rect = svg.getBoundingClientRect();
     const w = parseInt(svg.getAttribute('width') || '0', 10);
@@ -1237,9 +1275,51 @@ function inPageMapAiQuestions(parsedQuestions) {
       }
     }
 
-    if (qCard && qCard.previousElementSibling) {
-      const imgPrevCard = extractImageFromNode(qCard.previousElementSibling);
-      if (imgPrevCard) return imgPrevCard;
+    // Kiểm tra cấu trúc phân cấp: Thẻ anh em trước của qCard và các cấp cha (ancestors)
+    if (qCard) {
+      // 1. Anh em đứng trước trực tiếp của qCard
+      let prevSib = qCard.previousElementSibling;
+      let count = 0;
+      while (prevSib && count < 3) {
+        const imgPrev = extractImageFromNode(prevSib);
+        if (imgPrev) return imgPrev;
+        prevSib = prevSib.previousElementSibling;
+        count++;
+      }
+
+      // 2. Duyệt ngược lên các cấp cha (ancestors) để tìm Section Media (.yh-player-media, tranh ảnh/biển báo đi kèm)
+      let ancestor = qCard.parentElement;
+      let depth = 0;
+      while (ancestor && ancestor !== document.body && depth < 5) {
+        // Kiểm tra các phần tử anh em đứng trước của ancestor
+        let ancSib = ancestor.previousElementSibling;
+        let sibCount = 0;
+        while (ancSib && sibCount < 3) {
+          const sectionMedia = ancSib.querySelector('.yh-player-media, .yh-player-media--section, [class*="media"]');
+          if (sectionMedia) {
+            const imgSm = extractImageFromNode(sectionMedia);
+            if (imgSm) return imgSm;
+          }
+          const imgAnc = extractImageFromNode(ancSib);
+          if (imgAnc) return imgAnc;
+          ancSib = ancSib.previousElementSibling;
+          sibCount++;
+        }
+
+        // Kiểm tra bên trong ancestor nếu có media nằm trước qCard
+        const mediaNodes = Array.from(ancestor.querySelectorAll('.yh-player-media, .yh-player-media--section, img'));
+        for (const mn of mediaNodes) {
+          if (mn !== qCard && !qCard.contains(mn)) {
+            if (mn.compareDocumentPosition(qCard) & Node.DOCUMENT_POSITION_FOLLOWING) {
+              const imgMn = extractImageFromNode(mn);
+              if (imgMn) return imgMn;
+            }
+          }
+        }
+
+        ancestor = ancestor.parentElement;
+        depth++;
+      }
     }
 
     return null;
@@ -1577,17 +1657,19 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      CHÚ Ý CỰC KỲ QUAN TRỌNG: CHỈ trích xuất các phương án THỰC SỰ CÓ trong đề thi! Nếu câu hỏi chỉ có 3 đáp án A, B, C thì CHỈ tạo đúng 3 phần tử A, B, C trong mảng options, TUYỆT ĐỐI KHÔNG tự thêm phương án D rỗng hoặc gán text rỗng!
    - Dạng 2: "true_false_group" - Dạng Đúng / Sai (Phần II theo form mới Bộ GD&ĐT), mỗi câu có các mệnh đề A, B, C, D (hoặc a, b, c, d) và mỗi mệnh đề có 2 lựa chọn Đúng / Sai.
 
-2. ĐOẠN VĂN ĐỌC HIỂU / ĐOẠN TƯ LIỆU DÙNG CHUNG ("passage"):
-   - Nếu có đoạn văn đọc hiểu, đoạn tư liệu dùng chung cho một nhóm câu (hoặc 1 câu):
-     BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc/tư liệu đó vào trường "passage".
-   - Nếu câu độc lập không có bài đọc hiểu/tư liệu chung, để "passage": null.
+2. BÀI ĐỌC HIỂU, ĐOẠN TƯ LIỆU, HOẶC BẢNG SỐ LIỆU ("passage"):
+   - CỰC KỲ QUAN TRỌNG: Nếu có đoạn văn đọc hiểu, đoạn trích, đoạn tư liệu, hoặc [BẢNG THÔNG TIN / DỮ LIỆU] dùng chung cho một câu hoặc một nhóm câu (ví dụ: 'Read the following passage...', 'Dựa vào bảng số liệu sau...', 'Cho đoạn tư liệu sau...'):
+     BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc, tư liệu hoặc bảng số liệu đó vào trường "passage" của tất cả các câu hỏi thuộc phần đọc hiểu đó.
+   - Nếu câu độc lập không có bài đọc/tư liệu/bảng số liệu riêng, để "passage": null.
 
-3. HÌNH ẢNH / SƠ ĐỒ MINH HỌA ("image"):
-   - Nếu trong câu hỏi có xuất hiện [HÌNH ẢNH: url] hoặc link ảnh minh họa, hãy trích xuất link ảnh vào trường "image".
-   - Nếu không có, để "image": null.
+3. HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO / SƠ ĐỒ ("image"):
+   - CỰC KỲ QUAN TRỌNG: Các câu hỏi dạng nhìn hình nhận xét, đọc hiểu biển báo/thông báo/tranh ảnh (ví dụ: 'Read the following notice...', 'What does the notice/sign say?', 'Quan sát hình vẽ sau...', 'Dựa vào sơ đồ...'):
+     Nếu có [HÌNH ẢNH: url] hoặc [HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO CHO CÂU HỎI TIẾP THEO: url] nằm ngay TRƯỚC câu hỏi hoặc trong câu hỏi, BẮT BUỘC phải trích xuất link ảnh đó và gán vào trường "image" của câu hỏi đó (hoặc tất cả các câu hỏi cùng hỏi về hình ảnh này)!
+   - TUYỆT ĐỐI KHÔNG ĐƯỢC để "image": null khi đề bài có hình ảnh/biển báo/thông báo minh họa tương ứng!
+   - Nếu không có hình ảnh minh họa, để "image": null.
 
 4. BỎ QUA CÁC THÀNH PHẦN RÁC:
-   - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số, chữ "Đúng Sai" bị lặp rác, nút nộp bài.
+   - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số (ví dụ: '(Điểm: 0.25)'), chữ "Đúng Sai" bị lặp rác, nút nộp bài, các nút thu nhỏ/phóng to hình ("− 100% + Đặt lại").
 
 5. CẤU TRÚC JSON MỖI PHẦN TỬ:
    - Nếu là dạng "single_choice":
@@ -1677,8 +1759,9 @@ ${pageText.slice(0, 45000)}`;
         const detectedImage = imageMap[qNum] || item.image || null;
 
         let finalTitle = item.title || `Câu hỏi ${qNum}`;
-        if (item.passage) {
-          finalTitle = `[ĐỌC HIỂU / TƯ LIỆU]:\n${item.passage}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
+        const passageText = item.passage || null;
+        if (passageText && !finalTitle.includes('[ĐỌC HIỂU') && !finalTitle.includes('[TƯ LIỆU')) {
+          finalTitle = `[ĐỌC HIỂU / TƯ LIỆU]:\n${passageText}\n\n[NỘI DUNG CÂU HỎI]:\n${finalTitle}`;
         }
 
         if (isTF) {
@@ -1696,6 +1779,7 @@ ${pageText.slice(0, 45000)}`;
             index: idx + 1,
             type: 'true_false_group',
             title: finalTitle,
+            passage: passageText,
             image: detectedImage,
             items: tfItems,
             options: [],
@@ -1726,6 +1810,7 @@ ${pageText.slice(0, 45000)}`;
           index: idx + 1,
           type: 'single_choice',
           title: finalTitle,
+          passage: passageText,
           image: detectedImage,
           options: options,
           selectedAnswer: null,
@@ -1751,6 +1836,8 @@ ${pageText.slice(0, 45000)}`;
     const model = txtModel.value.trim() || DEFAULT_MODEL;
 
     const imgNote = q.image ? (q.image.startsWith('data:') ? '\n(LƯU Ý: Câu hỏi có hình vẽ / sơ đồ minh họa đi kèm)' : `\n(LƯU Ý: Câu hỏi có hình ảnh minh họa đi kèm: ${q.image})`) : '';
+    const passageContext = q.passage ? `\n\nBÀI ĐỌC HIỂU / ĐOẠN TƯ LIỆU / BẢNG SỐ LIỆU:\n${q.passage}\n` : '';
+    const hasVisionImage = q.image && (q.image.startsWith('http://') || q.image.startsWith('https://') || q.image.startsWith('data:image/'));
 
     function extractJsonFromText(text) {
       if (!text) return null;
@@ -1770,9 +1857,9 @@ ${pageText.slice(0, 45000)}`;
       const itemsText = (q.items || []).map(it => `${it.key}. ${it.statement}`).join('\n');
       const prompt = `Bạn là chuyên gia giải đề thi trắc nghiệm siêu chính xác.
 Dưới đây là câu hỏi dạng ĐÚNG / SAI (Phần II theo cấu trúc đề thi mới).
-Hãy đọc kỹ đề bài/tư liệu và xác định từng ý/mệnh đề A, B, C, D là "Đúng" hay "Sai".
-
-ĐỀ BÀI / ĐOẠN TƯ LIỆU:
+Hãy đọc kỹ đề bài, đoạn tư liệu/bảng số liệu và hình ảnh minh họa (nếu có) để xác định từng ý/mệnh đề A, B, C, D là "Đúng" hay "Sai".
+${passageContext}
+ĐỀ BÀI:
 ${q.title}${imgNote}
 
 CÁC MỆNH ĐỀ CẦN XÁC ĐỊNH:
@@ -1790,7 +1877,26 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
   "explanation": "Giải thích ngắn gọn cho từng ý"
 }`;
 
-      const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+      let messages = [
+        { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' }
+      ];
+
+      if (hasVisionImage) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: q.image } }
+          ]
+        });
+      } else {
+        messages.push({
+          role: 'user',
+          content: prompt
+        });
+      }
+
+      let res = await fetch('https://api.key4u.vn/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1798,13 +1904,29 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
         },
         body: JSON.stringify({
           model: model,
-          messages: [
-            { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
-            { role: 'user', content: prompt }
-          ],
+          messages: messages,
           temperature: 0.1
         })
       });
+
+      // Fallback tự động nếu gửi ảnh qua vision gặp lỗi (ví dụ model không hỗ trợ vision)
+      if (!res.ok && hasVisionImage) {
+        res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.1
+          })
+        });
+      }
 
       if (!res.ok) {
         const errBody = await res.text();
@@ -1848,8 +1970,8 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
     const optionsText = (q.options || []).map(o => `${o.key}. ${o.text}`).join('\n');
     const availableKeys = (q.options || []).map(o => o.key).join(', ');
     const prompt = `Bạn là một chuyên gia giải đề trắc nghiệm siêu chính xác.
-Hãy đọc câu hỏi và các phương án lựa chọn dưới đây, sau đó tìm ra ĐÁP ÁN ĐÚNG NHẤT trong các phương án (${availableKeys}).
-
+Hãy đọc kỹ câu hỏi, ngữ cảnh bài đọc/bảng số liệu và hình ảnh minh họa (nếu có), sau đó tìm ra ĐÁP ÁN ĐÚNG NHẤT trong các phương án (${availableKeys}).
+${passageContext}
 CÂU HỎI:
 ${q.title}${imgNote}
 
@@ -1863,7 +1985,26 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   "explanation": "Giải thích ngắn gọn 1-2 câu"
 }`;
 
-    const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+    let messages = [
+      { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' }
+    ];
+
+    if (hasVisionImage) {
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: q.image } }
+        ]
+      });
+    } else {
+      messages.push({
+        role: 'user',
+        content: prompt
+      });
+    }
+
+    let res = await fetch('https://api.key4u.vn/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1871,13 +2012,28 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       },
       body: JSON.stringify({
         model: model,
-        messages: [
-          { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
-          { role: 'user', content: prompt }
-        ],
+        messages: messages,
         temperature: 0.1
       })
     });
+
+    if (!res.ok && hasVisionImage) {
+      res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1
+        })
+      });
+    }
 
     if (!res.ok) {
       const errBody = await res.text();
@@ -2291,6 +2447,23 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
       header.appendChild(title);
       header.appendChild(actions);
       card.appendChild(header);
+
+      if (q.passage) {
+        const passageBox = document.createElement('div');
+        passageBox.className = 'q-passage-box';
+        passageBox.style.background = 'rgba(255, 255, 255, 0.05)';
+        passageBox.style.border = '1px dashed var(--border-color, #cbd5e1)';
+        passageBox.style.borderRadius = '6px';
+        passageBox.style.padding = '8px 10px';
+        passageBox.style.margin = '6px 0';
+        passageBox.style.fontSize = '12px';
+        passageBox.style.lineHeight = '1.45';
+        passageBox.style.whiteSpace = 'pre-wrap';
+        passageBox.style.maxHeight = '180px';
+        passageBox.style.overflowY = 'auto';
+        passageBox.innerHTML = `<strong>📖 Đoạn tư liệu / Bảng thông tin:</strong><br>${q.passage}`;
+        card.appendChild(passageBox);
+      }
 
       if (q.image) {
         const imgContainer = document.createElement('div');

@@ -1180,6 +1180,7 @@
             if (imgP) return imgP;
           }
 
+          // Kiểm tra anh em đứng sau (next siblings)
           let sib = h.nextElementSibling;
           let count = 0;
           while (sib && count < 5) {
@@ -1193,6 +1194,7 @@
             count++;
           }
 
+          // Kiểm tra anh em đứng trước (previous siblings)
           let prev = h.previousElementSibling;
           count = 0;
           while (prev && count < 3) {
@@ -1214,9 +1216,49 @@
         }
       }
 
-      if (qCard && qCard.previousElementSibling) {
-        const imgPrevCard = extractImageFromNode(qCard.previousElementSibling);
-        if (imgPrevCard) return imgPrevCard;
+      // Kiểm tra cấu trúc phân cấp: Thẻ anh em trước của qCard và các cấp cha (ancestors)
+      if (qCard) {
+        // 1. Anh em đứng trước trực tiếp của qCard
+        let prevSib = qCard.previousElementSibling;
+        let count = 0;
+        while (prevSib && count < 3) {
+          const imgPrev = extractImageFromNode(prevSib);
+          if (imgPrev) return imgPrev;
+          prevSib = prevSib.previousElementSibling;
+          count++;
+        }
+
+        // 2. Duyệt ngược lên các cấp cha (ancestors) để tìm Section Media (.yh-player-media, tranh ảnh/biển báo đi kèm)
+        let ancestor = qCard.parentElement;
+        let depth = 0;
+        while (ancestor && ancestor !== document.body && depth < 5) {
+          let ancSib = ancestor.previousElementSibling;
+          let sibCount = 0;
+          while (ancSib && sibCount < 3) {
+            const sectionMedia = ancSib.querySelector('.yh-player-media, .yh-player-media--section, [class*="media"]');
+            if (sectionMedia) {
+              const imgSm = extractImageFromNode(sectionMedia);
+              if (imgSm) return imgSm;
+            }
+            const imgAnc = extractImageFromNode(ancSib);
+            if (imgAnc) return imgAnc;
+            ancSib = ancSib.previousElementSibling;
+            sibCount++;
+          }
+
+          const mediaNodes = Array.from(ancestor.querySelectorAll('.yh-player-media, .yh-player-media--section, img'));
+          for (const mn of mediaNodes) {
+            if (mn !== qCard && !qCard.contains(mn)) {
+              if (mn.compareDocumentPosition(qCard) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                const imgMn = extractImageFromNode(mn);
+                if (imgMn) return imgMn;
+              }
+            }
+          }
+
+          ancestor = ancestor.parentElement;
+          depth++;
+        }
       }
 
       return null;
@@ -1343,19 +1385,57 @@
   async function extractQuestionsWithAI(apiKey, detectModel) {
     const clone = document.body.cloneNode(true);
 
-    // Đánh dấu ảnh bằng marker văn bản để AI nhận biết có hình ảnh/sơ đồ
+    // 1. Loại bỏ các nút điều khiển media, nút zoom ảnh, phân trang, cờ đánh dấu
+    clone.querySelectorAll('.yh-player-media__image-controls, .yh-player-media__audio-controls, button, .ant-btn, [class*="controls"], [class*="btn"], .ant-divider, .yh-question-action, .anticon-flag').forEach(el => el.remove());
+
+    // 2. Chuyển đổi các thẻ <table> thành định dạng Markdown table rõ ràng để AI đọc hiểu dữ liệu
+    clone.querySelectorAll('table').forEach(tbl => {
+      try {
+        const rows = Array.from(tbl.querySelectorAll('tr'));
+        if (rows.length === 0) return;
+
+        const mdRows = [];
+        let maxCols = 0;
+
+        rows.forEach((tr, rIdx) => {
+          const cells = Array.from(tr.querySelectorAll('th, td')).map(td => {
+            return (td.innerText || td.textContent || '').replace(/[\r\n\t]+/g, ' ').trim();
+          });
+          if (cells.length > 0) {
+            if (cells.length > maxCols) maxCols = cells.length;
+            mdRows.push(`| ${cells.join(' | ')} |`);
+            if (rIdx === 0) {
+              const divider = cells.map(() => '---').join(' | ');
+              mdRows.push(`| ${divider} |`);
+            }
+          }
+        });
+
+        if (mdRows.length > 0) {
+          const tableText = `\n\n[BẢNG THÔNG TIN / DỮ LIỆU]:\n${mdRows.join('\n')}\n\n`;
+          const marker = document.createTextNode(tableText);
+          tbl.parentNode?.replaceChild(marker, tbl);
+        }
+      } catch (e) {}
+    });
+
+    // 3. Đánh dấu ảnh bằng marker văn bản để AI nhận biết có hình ảnh/sơ đồ
     clone.querySelectorAll('img').forEach(img => {
       const src = img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src;
       if (src && src.length > 10) {
         const lower = src.toLowerCase();
         if (!lower.includes('avatar') && !lower.includes('icon.php') && !lower.includes('/pix/') && !lower.includes('favicon') && !lower.includes('logo')) {
-          const marker = document.createTextNode(`\n[HÌNH ẢNH: ${src}]\n`);
+          const isSectionMedia = !!img.closest('.yh-player-media, .yh-player-media--section, [class*="section-media"], [class*="player-media"]');
+          const markerText = isSectionMedia
+            ? `\n[HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO CHO CÂU HỎI TIẾP THEO: ${src}]\n`
+            : `\n[HÌNH ẢNH: ${src}]\n`;
+          const marker = document.createTextNode(markerText);
           img.parentNode?.replaceChild(marker, img);
         }
       }
     });
 
-    // Đánh dấu sơ đồ hình học SVG bằng marker văn bản
+    // 4. Đánh dấu sơ đồ hình học SVG bằng marker văn bản
     clone.querySelectorAll('svg').forEach(svg => {
       const rect = svg.getBoundingClientRect();
       const w = parseInt(svg.getAttribute('width') || '0', 10);
@@ -1387,17 +1467,19 @@ CÁC NGUYÊN TẮC BẮT BUỘC:
      CHÚ Ý CỰC KỲ QUAN TRỌNG: CHỈ trích xuất các phương án THỰC SỰ CÓ trong đề thi! Nếu câu hỏi chỉ có 3 đáp án A, B, C thì CHỈ tạo đúng 3 phần tử A, B, C trong mảng options, TUYỆT ĐỐI KHÔNG tự thêm phương án D rỗng hoặc gán text rỗng!
    - Dạng 2: "true_false_group" - Dạng Đúng / Sai (Phần II theo form mới Bộ GD&ĐT), mỗi câu có các mệnh đề A, B, C, D (hoặc a, b, c, d) và mỗi mệnh đề có 2 lựa chọn Đúng / Sai.
 
-2. ĐOẠN VĂN ĐỌC HIỂU / ĐOẠN TƯ LIỆU DÙNG CHUNG ("passage"):
-   - Nếu có đoạn văn đọc hiểu, đoạn tư liệu dùng chung cho một nhóm câu (hoặc 1 câu):
-     BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc/tư liệu đó vào trường "passage".
-   - Nếu câu độc lập không có bài đọc hiểu/tư liệu chung, để "passage": null.
+2. BÀI ĐỌC HIỂU, ĐOẠN TƯ LIỆU, HOẶC BẢNG SỐ LIỆU ("passage"):
+   - CỰC KỲ QUAN TRỌNG: Nếu có đoạn văn đọc hiểu, đoạn trích, đoạn tư liệu, hoặc [BẢNG THÔNG TIN / DỮ LIỆU] dùng chung cho một câu hoặc một nhóm câu (ví dụ: 'Read the following passage...', 'Dựa vào bảng số liệu sau...', 'Cho đoạn tư liệu sau...'):
+     BẮT BUỘC trích xuất TOÀN BỘ nội dung bài đọc, tư liệu hoặc bảng số liệu đó vào trường "passage" của tất cả các câu hỏi thuộc phần đọc hiểu đó.
+   - Nếu câu độc lập không có bài đọc/tư liệu/bảng số liệu riêng, để "passage": null.
 
-3. HÌNH ẢNH / SƠ ĐỒ MINH HỌA ("image"):
-   - Nếu trong câu hỏi có xuất hiện [HÌNH ẢNH: url] hoặc link ảnh minh họa, hãy trích xuất link ảnh vào trường "image".
-   - Nếu không có, để "image": null.
+3. HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO / SƠ ĐỒ ("image"):
+   - CỰC KỲ QUAN TRỌNG: Các câu hỏi dạng nhìn hình nhận xét, đọc hiểu biển báo/thông báo/tranh ảnh (ví dụ: 'Read the following notice...', 'What does the notice/sign say?', 'Quan sát hình vẽ sau...', 'Dựa vào sơ đồ...'):
+     Nếu có [HÌNH ẢNH: url] hoặc [HÌNH ẢNH / BIỂN BÁO / THÔNG BÁO CHO CÂU HỎI TIẾP THEO: url] nằm ngay TRƯỚC câu hỏi hoặc trong câu hỏi, BẮT BUỘC phải trích xuất link ảnh đó và gán vào trường "image" của câu hỏi đó (hoặc tất cả các câu hỏi cùng hỏi về hình ảnh này)!
+   - TUYỆT ĐỐI KHÔNG ĐƯỢC để "image": null khi đề bài có hình ảnh/biển báo/thông báo minh họa tương ứng!
+   - Nếu không có hình ảnh minh họa, để "image": null.
 
 4. BỎ QUA CÁC THÀNH PHẦN RÁC:
-   - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số, chữ "Đúng Sai" bị lặp rác, nút nộp bài.
+   - Đồng hồ đếm ngược, bảng danh sách câu hỏi, điểm số (ví dụ: '(Điểm: 0.25)'), chữ "Đúng Sai" bị lặp rác, nút nộp bài, các nút thu nhỏ/phóng to hình ("− 100% + Đặt lại").
 
 5. CẤU TRÚC JSON MỖI PHẦN TỬ:
    - Nếu là dạng "single_choice":
@@ -1494,6 +1576,7 @@ ${pageText.slice(0, 45000)}`;
           index: idx + 1,
           type: 'true_false_group',
           title: finalTitle,
+          passage: item.passage || null,
           image: detectedImage,
           items: tfItems,
           options: [],
@@ -1523,6 +1606,7 @@ ${pageText.slice(0, 45000)}`;
         index: idx + 1,
         type: 'single_choice',
         title: finalTitle,
+        passage: item.passage || null,
         image: detectedImage,
         options: options,
         selectedAnswer: null
@@ -1531,11 +1615,45 @@ ${pageText.slice(0, 45000)}`;
   }
 
   // Hàm gọi API trực tiếp (khi chạy không qua background hoặc chạy thẳng F12 console)
-  async function directKey4USolve(prompt, model, apiKey) {
+  async function directKey4USolve(prompt, model, apiKey, imageUrl) {
     const key = apiKey || DEFAULT_API_KEY;
     const m = model || DEFAULT_MODEL;
+
+    function extractJsonFromText(text) {
+      if (!text) return null;
+      let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
+        try { return JSON.parse(jsonStr); } catch (e) {}
+      }
+      try { return JSON.parse(cleaned); } catch (e) {}
+      return null;
+    }
+
     try {
-      const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+      let messages = [
+        { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' }
+      ];
+
+      const hasVisionImage = imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://') || imageUrl.startsWith('data:image/'));
+      if (hasVisionImage) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        });
+      } else {
+        messages.push({
+          role: 'user',
+          content: prompt
+        });
+      }
+
+      let res = await fetch('https://api.key4u.vn/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1543,26 +1661,39 @@ ${pageText.slice(0, 45000)}`;
         },
         body: JSON.stringify({
           model: m,
-          messages: [
-            { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
-            { role: 'user', content: prompt }
-          ],
+          messages: messages,
           temperature: 0.1
         })
       });
+
+      if (!res.ok && hasVisionImage) {
+        res = await fetch('https://api.key4u.vn/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${key}`
+          },
+          body: JSON.stringify({
+            model: m,
+            messages: [
+              { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.1
+          })
+        });
+      }
+
       if (!res.ok) return { success: false, error: 'HTTP ' + res.status };
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content || '';
-      let parsed = null;
-      try {
-        const jsonMatch = content.match(/\{[\s\S]*?\}/);
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-      } catch (e) {
+      let parsed = extractJsonFromText(content);
+      if (!parsed) {
         const match = content.match(/([A-H])[\.\)\:]/i) || content.match(/\b([A-H])\b/i);
         if (match) parsed = { answer: match[1].toUpperCase(), explanation: content };
       }
-      if (parsed && parsed.answer) {
-        return { success: true, data: { answer: parsed.answer.toUpperCase().trim() } };
+      if (parsed) {
+        return { success: true, data: parsed };
       }
       return { success: false, error: 'No answer parsed' };
     } catch (e) {
@@ -1609,6 +1740,8 @@ ${pageText.slice(0, 45000)}`;
       let successCount = 0;
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
+        const imgNote = q.image ? (q.image.startsWith('data:') ? '\n(LƯU Ý: Câu hỏi có hình vẽ / sơ đồ minh họa đi kèm)' : `\n(LƯU Ý: Câu hỏi có hình ảnh minh họa đi kèm: ${q.image})`) : '';
+        const passageContext = q.passage ? `\n\nBÀI ĐỌC HIỂU / ĐOẠN TƯ LIỆU / BẢNG SỐ LIỆU:\n${q.passage}\n` : '';
 
         // 1. Dạng câu hỏi Đúng / Sai 4 ý (Phần II)
         if (q.type === 'true_false_group') {
@@ -1616,10 +1749,10 @@ ${pageText.slice(0, 45000)}`;
           const itemsText = q.items.map(it => `${it.key}. ${it.statement}`).join('\n');
           const prompt = `Bạn là chuyên gia giải đề thi trắc nghiệm siêu chính xác.
 Dưới đây là câu hỏi dạng ĐÚNG / SAI 4 Ý (Phần II theo form mới Bộ GD&ĐT).
-Hãy đọc kỹ đoạn tư liệu/đề bài và đánh giá từng mệnh đề A, B, C, D là "Đúng" hay "Sai".
-
-ĐỀ BÀI / ĐOẠN TƯ LIỆU:
-${q.title}
+Hãy đọc kỹ đoạn tư liệu/bảng số liệu/đề bài và hình ảnh minh họa (nếu có) để đánh giá từng mệnh đề A, B, C, D là "Đúng" hay "Sai".
+${passageContext}
+ĐỀ BÀI:
+${q.title}${imgNote}
 
 CÁC MỆNH ĐỀ:
 ${itemsText}
@@ -1630,8 +1763,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
   "answers": {
     "A": "Đúng" hoặc "Sai",
     "B": "Đúng" hoặc "Sai",
-    "C": "Đúng" hoặc "Sai",
-    "D": "Đúng" hoặc "Sai"
+    "C": "Đúng hoặc Sai",
+    "D": "Đúng hoặc Sai"
   },
   "explanation": "Giải thích ngắn gọn cho từng ý"
 }`;
@@ -1644,7 +1777,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
                   action: 'CALL_KEY4U_AI',
                   prompt: prompt,
                   model: model,
-                  apiKey: apiKey
+                  apiKey: apiKey,
+                  imageUrl: q.image || null
                 }, (res) => {
                   if (chrome.runtime.lastError) resolve({ success: false });
                   else resolve(res || { success: false });
@@ -1652,38 +1786,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
               });
             }
 
-            function extractJsonFromText(text) {
-              if (!text) return null;
-              let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-              const firstBrace = cleaned.indexOf('{');
-              const lastBrace = cleaned.lastIndexOf('}');
-              if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
-                try { return JSON.parse(jsonStr); } catch (e) {}
-              }
-              try { return JSON.parse(cleaned); } catch (e) {}
-              return null;
-            }
-
             if (!resp || !resp.success) {
-              const res = await fetch('https://api.key4u.vn/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-                body: JSON.stringify({
-                  model: model,
-                  messages: [
-                    { role: 'system', content: 'You are an expert exam solver. Always respond in valid JSON format.' },
-                    { role: 'user', content: prompt }
-                  ],
-                  temperature: 0.1
-                })
-              });
-              if (res.ok) {
-                const data = await res.json();
-                const content = data.choices?.[0]?.message?.content || '';
-                const parsed = extractJsonFromText(content);
-                if (parsed) resp = { success: true, data: parsed };
-              }
+              resp = await directKey4USolve(prompt, model, apiKey, q.image);
             }
 
             if (resp && resp.success && resp.data && resp.data.answers) {
@@ -1709,11 +1813,12 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
         if (!q.options || q.options.length === 0) continue;
 
         const optionsText = q.options.map(o => `${o.key}. ${o.text}`).join('\n');
+        const availableKeys = q.options.map(o => o.key).join(', ');
         const prompt = `Bạn là một chuyên gia giải đề trắc nghiệm siêu chính xác.
-Hãy đọc câu hỏi và các phương án lựa chọn dưới đây, sau đó tìm ra ĐÁP ÁN ĐÚNG NHẤT.
-
+Hãy đọc kỹ câu hỏi, ngữ cảnh bài đọc/bảng số liệu và hình ảnh minh họa (nếu có), sau đó tìm ra ĐÁP ÁN ĐÚNG NHẤT trong các phương án (${availableKeys}).
+${passageContext}
 CÂU HỎI:
-${q.title}
+${q.title}${imgNote}
 
 CÁC LỰA CHỌN:
 ${optionsText}
@@ -1721,7 +1826,7 @@ ${optionsText}
 YÊU CẦU:
 Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
 {
-  "answer": "A hoặc B hoặc C hoặc D",
+  "answer": "Chọn 1 trong các chữ cái: ${availableKeys}",
   "explanation": "Giải thích ngắn gọn 1-2 câu"
 }`;
 
@@ -1733,7 +1838,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
                 action: 'CALL_KEY4U_AI',
                 prompt: prompt,
                 model: model,
-                apiKey: apiKey
+                apiKey: apiKey,
+                imageUrl: q.image || null
               }, (res) => {
                 if (chrome.runtime.lastError) {
                   resolve({ success: false, error: chrome.runtime.lastError.message });
@@ -1744,9 +1850,8 @@ Trả về kết quả DUY NHẤT dưới dạng JSON hợp lệ:
             });
           }
 
-          // Dự phòng gọi trực tiếp nếu chạy ngoài extension (ví dụ dán F12 Console)
           if (!resp || !resp.success) {
-            resp = await directKey4USolve(prompt, model, apiKey);
+            resp = await directKey4USolve(prompt, model, apiKey, q.image);
           }
 
           if (resp && resp.success && resp.data) {
