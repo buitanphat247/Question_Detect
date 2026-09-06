@@ -65,7 +65,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// 2. Khi bấm phím tắt Alt + H: Tự giải ngầm, không mở popup
+// 2. Khi bấm phím tắt Alt + H hoặc Alt + Y: Tự giải ngầm, không mở popup
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'solve-all-questions') {
     try {
@@ -74,10 +74,137 @@ chrome.commands.onCommand.addListener(async (command) => {
         sendTriggerAutoSolve(tab.id, tab.url);
       }
     } catch (err) {
-      console.warn('Lỗi phím tắt an toàn:', err.message);
+      console.warn('Lỗi phím tắt Alt+H:', err.message);
     }
+  } else if (command === 'capture-and-solve') {
+    handleCaptureAndSolve();
   }
 });
+
+let isCapturingProcess = false;
+async function handleCaptureAndSolve(targetTabId) {
+  if (isCapturingProcess) return;
+  isCapturingProcess = true;
+
+  try {
+    let tabId = targetTabId;
+    let windowId = null;
+
+    if (!tabId) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab) {
+        tabId = tab.id;
+        windowId = tab.windowId;
+      }
+    } else {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (tab) windowId = tab.windowId;
+    }
+
+    if (!tabId) {
+      isCapturingProcess = false;
+      return;
+    }
+
+    // 1. Chụp ảnh màn hình vùng nhìn thấy của tab hiện tại
+    const screenshotUrl = await new Promise((resolve) => {
+      chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 85 }, (dataUrl) => {
+        if (chrome.runtime.lastError || !dataUrl) {
+          resolve(null);
+        } else {
+          resolve(dataUrl);
+        }
+      });
+    });
+
+    if (!screenshotUrl) {
+      isCapturingProcess = false;
+      return;
+    }
+
+    // 2. Lấy API Key & Model từ storage (mặc định gpt-5.5 hỗ trợ Vision cực đỉnh)
+    let apiKey = DEFAULT_API_KEY;
+    let model = 'gpt-5.5';
+    try {
+      const stored = await new Promise(r => {
+        chrome.storage.local.get(['key4uApiKey', 'key4uModel'], res => r(res || {}));
+      });
+      if (stored?.key4uApiKey) apiKey = stored.key4uApiKey;
+      if (stored?.key4uModel) model = stored.key4uModel;
+    } catch (e) {}
+
+    // 3. Xây dựng prompt giải đề chuyên sâu từ ảnh chụp màn hình
+    const prompt = `Bạn là chuyên gia giải đề thi trắc nghiệm siêu chuẩn xác.
+Dưới đây là ẢNH CHỤP MÀN HÌNH bài thi đang hiển thị trực tiếp trên màn hình của học sinh/sinh viên.
+
+HÃY QUAN SÁT THẬT KỸ TOÀN BỘ CÂU HỎI VÀ ĐÁP ÁN TRÊN ẢNH ĐỂ TÌM ĐÁP ÁN ĐÚNG:
+1. Xác định tất cả các câu hỏi đang nhìn thấy được trên màn hình.
+2. Với mỗi câu hỏi:
+   - "num": Số thứ tự của câu (ví dụ 1, 2, 27...).
+   - "type": "single_choice" (nếu chọn 1 đáp án A, B, C, D) hoặc "true_false_group" (nếu là dạng Đúng/Sai 4 ý A, B, C, D).
+   - "answer": Chữ cái đáp án đúng nhất (ví dụ: "A", "B", "C" hoặc "D").
+   - "answers": Nếu là câu Đúng/Sai, trả về: { "A": "Đúng" hoặc "Sai", "B": "Đúng" hoặc "Sai", "C": "Đúng" hoặc "Sai", "D": "Đúng" hoặc "Sai" }
+   - "optionText": Trích một đoạn chữ ngắn (10-30 ký tự) của phương án đúng đó (ví dụ "Có anode và cathode...", "Không có cực tính", "that", ...) để hệ thống đối chiếu click chuẩn 100%.
+
+YÊU CẦU ĐẦU RA BẮT BUỘC:
+Chỉ trả về DUY NHẤT một khối JSON hợp lệ theo định dạng:
+{
+  "questions": [
+    {
+      "num": 1,
+      "type": "single_choice",
+      "answer": "C",
+      "optionText": "nội dung phương án đúng",
+      "explanation": "giải thích ngắn gọn 1 câu"
+    }
+  ]
+}`;
+
+    // 4. Gọi Vision AI giải bài
+    const aiResult = await solveWithKey4U(prompt, model, apiKey, screenshotUrl);
+
+    let items = [];
+    if (aiResult) {
+      if (Array.isArray(aiResult.questions)) {
+        items = aiResult.questions;
+      } else if (Array.isArray(aiResult)) {
+        items = aiResult;
+      } else if (aiResult.answer || aiResult.answers) {
+        items = [aiResult];
+      }
+    }
+
+    if (items.length === 0) {
+      isCapturingProcess = false;
+      return;
+    }
+
+    // 5. Gửi danh sách đáp án sang content script để lập tức click chọn trực tiếp trên trang
+    chrome.tabs.sendMessage(tabId, {
+      action: 'APPLY_CAPTURE_SOLVE_RESULTS',
+      data: items
+    }, () => {
+      if (chrome.runtime.lastError) {
+        chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          files: ['content.js']
+        }).then(() => {
+          setTimeout(() => {
+            chrome.tabs.sendMessage(tabId, {
+              action: 'APPLY_CAPTURE_SOLVE_RESULTS',
+              data: items
+            });
+          }, 150);
+        }).catch(() => {});
+      }
+    });
+
+  } catch (err) {
+    console.warn('[CaptureSolver] Lỗi:', err);
+  } finally {
+    isCapturingProcess = false;
+  }
+}
 
 // Lắng nghe yêu cầu gọi API từ content script hoặc popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -86,6 +213,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(res => sendResponse({ success: true, data: res }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // Giữ kết nối async
+  } else if (request.action === 'TRIGGER_CAPTURE_SOLVE') {
+    handleCaptureAndSolve(sender?.tab?.id);
+    sendResponse({ success: true });
+    return true;
   }
 });
 

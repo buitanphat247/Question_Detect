@@ -22,6 +22,13 @@
         "mac": "Alt+H"
       },
       "description": "Quét đề, giải AI và tự động tích chọn đáp án trên web"
+    },
+    "capture-and-solve": {
+      "suggested_key": {
+        "default": "Alt+Y",
+        "mac": "Alt+Y"
+      },
+      "description": "Chụp màn hình bài thi, AI Vision giải và tự động chọn đáp án"
     }
   },
   "action": {
