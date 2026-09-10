@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Q&A Detector & AI Auto Solver",
   "version": "1.1.0",
-  "description": "Tự động bóc tách câu hỏi & đáp án trên web, giải bằng AI (GPT-5.5) và tự động tích chọn đáp án trực tiếp trên trang.",
+  "description": "Tự động bóc tách câu hỏi & đáp án trên web, giải bằng AI đối chiếu (Claude Opus 4.8 & Gemini 3.5 Flash) và tự động tích chọn đáp án trực tiếp trên trang.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -16,12 +16,19 @@
     "service_worker": "background.js"
   },
   "commands": {
-    "solve-all-questions": {
+    "solve-single-question": {
       "suggested_key": {
         "default": "Alt+H",
         "mac": "Alt+H"
       },
-      "description": "Quét đề, giải AI và tự động tích chọn đáp án trên web"
+      "description": "Giải 1 câu hỏi (Từng câu một, không tự chuyển trang)"
+    },
+    "solve-continuous": {
+      "suggested_key": {
+        "default": "Alt+K",
+        "mac": "Alt+K"
+      },
+      "description": "Tự động giải liên tiếp (Tự giải & qua trang liên tục)"
     },
     "capture-and-solve": {
       "suggested_key": {
@@ -46,7 +53,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["config.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
