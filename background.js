@@ -287,6 +287,64 @@ if (typeof chrome !== 'undefined') {
       }
     });
   }
+
+  // 3. Menu Chuột Phải (Context Menus trên toàn bộ trang)
+  if (chrome.contextMenus) {
+    const setupMenus = () => {
+      chrome.contextMenus.removeAll(() => {
+        chrome.contextMenus.create({
+          id: 'qa-menu-root',
+          title: '⚡ AI Exam Solver',
+          contexts: ['all']
+        });
+        chrome.contextMenus.create({
+          parentId: 'qa-menu-root',
+          id: 'qa-capture-solve',
+          title: '📸 Chụp màn hình vùng chọn & Giải',
+          contexts: ['all']
+        });
+        chrome.contextMenus.create({
+          parentId: 'qa-menu-root',
+          id: 'qa-solve-single',
+          title: '⚡ Giải 1 câu hỏi này (Alt + H)',
+          contexts: ['all']
+        });
+        chrome.contextMenus.create({
+          parentId: 'qa-menu-root',
+          id: 'qa-solve-continuous',
+          title: '🚀 Tự động giải liên tiếp (Alt + K / Chuột giữa)',
+          contexts: ['all']
+        });
+      });
+    };
+
+    chrome.runtime.onInstalled.addListener(setupMenus);
+    chrome.runtime.onStartup.addListener(setupMenus);
+    setupMenus();
+
+    chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+      if (!tab || !tab.id) return;
+      if (info.menuItemId === 'qa-capture-solve') {
+        chrome.tabs.sendMessage(tab.id, { action: 'START_STEALTH_SNIP' }, async () => {
+          if (chrome.runtime.lastError) {
+            try {
+              await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['config.js', 'content.js']
+              });
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tab.id, { action: 'START_STEALTH_SNIP' }, () => {});
+              }, 100);
+            } catch (e) {}
+          }
+        });
+      } else if (info.menuItemId === 'qa-solve-single') {
+        sendTriggerAutoSolve(tab.id, tab.url, 'TRIGGER_SINGLE_SOLVE');
+      } else if (info.menuItemId === 'qa-solve-continuous') {
+        sendTriggerAutoSolve(tab.id, tab.url, 'TRIGGER_CONTINUOUS_SOLVE');
+      }
+    });
+  }
 }
 
 // Hàm cắt ảnh chụp màn hình theo toạ độ kéo thả của người dùng
@@ -358,9 +416,11 @@ async function handleCaptureAndSolve(targetTabId, cropRect) {
 
     // 1. Chụp ảnh màn hình vùng nhìn thấy của tab hiện tại
     let screenshotUrl = await new Promise((resolve) => {
-      chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 90 }, (dataUrl) => {
+      chrome.tabs.captureVisibleTab(windowId || null, { format: 'jpeg', quality: 90 }, (dataUrl) => {
         if (chrome.runtime.lastError || !dataUrl) {
-          resolve(null);
+          chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 90 }, (dataUrl2) => {
+            resolve(dataUrl2 || null);
+          });
         } else {
           resolve(dataUrl);
         }
@@ -712,8 +772,9 @@ async function solveWithKey4U(promptOrOptions, legacyModel, legacyApiKey, legacy
     firstError = err.name === 'AbortError' ? `Key4U API quá thời gian (${Math.round(requestTimeout / 1000)}s)` : err.message;
   }
 
-  // TỰ ĐỘNG ĐỔI MODEL THEO DANH SÁCH BACKUP ĐA TẦNG (NHẤT, NHÌ, BA) KHI MODEL GẶP LỖI HOẶC TIMEOUT
-  if (!res || !res.ok) {
+  // TỰ ĐỘNG ĐỔI MODEL THEO DANH SÁCH BACKUP ĐA TẦNG KHI MODEL BỊ LỖI KỸ THUẬT / TIMEOUT (TRỪ LỖI 401/403/429)
+  const isAuthOrRateLimit = res && (res.status === 401 || res.status === 403 || res.status === 429);
+  if (!res || (!res.ok && !isAuthOrRateLimit)) {
     for (let bIdx = 0; bIdx < BACKUP_MODELS.length; bIdx++) {
       const backupModel = BACKUP_MODELS[bIdx];
       if (backupModel === m) continue;

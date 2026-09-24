@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Solver - Đăng nhập</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="logo-box">
+        <span class="logo-icon">⚡</span>
+      </div>
+      <div>
+        <h1 class="title">AI Exam Solver</h1>
+        <p class="subtitle">Hệ thống phân quyền & xác thực</p>
+      </div>
+    </div>
+
+    <!-- VIEW 1: CHƯA ĐĂNG NHẬP -->
+    <div id="loginSection" class="section">
+      <div class="input-group">
+        <label for="studentIdInput">Mã sinh viên (MSV)</label>
+        <div class="input-wrapper">
+          <input type="text" id="studentIdInput" placeholder="VD: 2180601234..." autofocus autocomplete="off" />
+        </div>
+      </div>
+
+      <button id="btnLogin" class="btn btn-primary">
+        <span class="btn-text">Đăng Nhập Ngay</span>
+        <span class="spinner hidden" id="loginSpinner"></span>
+      </button>
+
+      <div id="loginMsg" class="msg-box hidden"></div>
+    </div>
+
+    <!-- VIEW 2: ĐÃ ĐĂNG NHẬP -->
+    <div id="userSection" class="section hidden">
+      <div class="user-badge">
+        <div class="status-indicator online"></div>
+        <div class="user-details">
+          <div class="user-name" id="displayStudentName">Sinh Viên</div>
+          <div class="user-msv">MSV: <span id="displayStudentId">---</span></div>
+        </div>
+        <div class="tag-status">Đã kích hoạt</div>
+      </div>
+
+      <div class="info-guide">
+        <div class="guide-item">
+          <span class="guide-key">🖱️ Click Lăn Chuột</span>
+          <span class="guide-desc">Giải Full toàn bộ bài liên tục</span>
+        </div>
+        <div class="guide-item">
+          <span class="guide-key">🖱️ Click Trái 3 lần</span>
+          <span class="guide-desc">Chụp vùng màn hình & giải</span>
+        </div>
+        <div class="guide-item">
+          <span class="guide-key">⌨️ Alt + H</span>
+          <span class="guide-desc">Giải 1 câu (Từng câu một)</span>
+        </div>
+        <div class="guide-item">
+          <span class="guide-key">⌨️ ESC</span>
+          <span class="guide-desc">Dừng khẩn cấp mọi tiến trình</span>
+        </div>
+      </div>
+
+      <button id="btnSnip" class="btn btn-snip">📸 Chụp Màn Hình & Giải</button>
+      <button id="btnLogout" class="btn btn-secondary">Đăng Xuất</button>
+    </div>
+
+    <div class="footer">
+      <span>Bảo mật thiết bị đơn (Single Active Session)</span>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
