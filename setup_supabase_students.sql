@@ -24,6 +24,7 @@ VALUES
     ('25110371', 'Sinh Viên 25110371', TRUE),
     ('25110289', 'Sinh Viên 25110289', TRUE),
     ('25110361', 'Sinh Viên 25110361', TRUE),
-    ('25110400', 'Sinh Viên 25110400', TRUE)
+    ('25110400', 'Sinh Viên 25110400', TRUE),
+    ('25110335', 'Sinh Viên 25110335', TRUE)
 ON CONFLICT (student_id) DO UPDATE 
 SET is_active = TRUE;
