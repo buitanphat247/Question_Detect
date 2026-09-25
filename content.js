@@ -4792,8 +4792,15 @@ ${JSON.stringify(payload, null, 2)}
         return;
       }
 
+      // Phím N: Giải 1 câu hiện tại (khi không gõ vào ô nhập liệu text)
+      const activeTag = (document.activeElement?.tagName || '').toUpperCase();
+      const isEditableInput = document.activeElement?.isContentEditable || 
+        (activeTag === 'INPUT' && !['RADIO', 'CHECKBOX', 'BUTTON', 'SUBMIT'].includes(document.activeElement?.type?.toUpperCase() || '')) || 
+        activeTag === 'TEXTAREA';
+
+      const isKeyN = (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN') && !isEditableInput);
       const isAltH = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H' || e.code === 'KeyH'));
-      if (isAltH) {
+      if (isKeyN || isAltH) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation?.();
