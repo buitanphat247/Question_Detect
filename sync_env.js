@@ -54,7 +54,7 @@ if (typeof console !== 'undefined') {
 // Tự động sinh bởi sync_env.js vào lúc: ${new Date().toLocaleString('vi-VN')}
 // =========================================================================
 
-const APP_CONFIG = {
+var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG : {
   // 1. REASONING / SUY LUẬN SÂU
   ENABLE_REASONING: ${enableReasoning},            // true = BẬT suy luận sâu, false = TẮT
   REASONING_EFFORT: '${reasoningEffort}',          // 'high' | 'medium' | 'low'
@@ -71,16 +71,30 @@ const APP_CONFIG = {
   KEY4U_API_KEY: '${apiKey}'
 };
 
-function isReasoningEnabled() {
-  return APP_CONFIG.ENABLE_REASONING !== false;
+var isReasoningEnabled = (typeof isReasoningEnabled === 'function') ? isReasoningEnabled : function () {
+  return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_REASONING !== false;
+};
+
+var getReasoningEffort = (typeof getReasoningEffort === 'function') ? getReasoningEffort : function () {
+  return (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.REASONING_EFFORT) || 'high';
+};
+
+var isSupabaseCacheEnabled = (typeof isSupabaseCacheEnabled === 'function') ? isSupabaseCacheEnabled : function () {
+  return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_SUPABASE_CACHE === true;
+};
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.APP_CONFIG = APP_CONFIG;
+  globalThis.isReasoningEnabled = isReasoningEnabled;
+  globalThis.getReasoningEffort = getReasoningEffort;
+  globalThis.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
 }
 
-function getReasoningEffort() {
-  return APP_CONFIG.REASONING_EFFORT || 'high';
-}
-
-function isSupabaseCacheEnabled() {
-  return APP_CONFIG.ENABLE_SUPABASE_CACHE === true;
+if (typeof window !== 'undefined') {
+  window.APP_CONFIG = APP_CONFIG;
+  window.isReasoningEnabled = isReasoningEnabled;
+  window.getReasoningEffort = getReasoningEffort;
+  window.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -90,13 +104,6 @@ if (typeof module !== 'undefined' && module.exports) {
     getReasoningEffort,
     isSupabaseCacheEnabled
   };
-}
-
-if (typeof globalThis !== 'undefined') {
-  globalThis.APP_CONFIG = APP_CONFIG;
-  globalThis.isReasoningEnabled = isReasoningEnabled;
-  globalThis.getReasoningEffort = getReasoningEffort;
-  globalThis.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
 }
 `;
 
