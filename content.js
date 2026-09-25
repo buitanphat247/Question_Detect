@@ -181,7 +181,7 @@
 
     // Bỏ prefix chung nếu còn: "(A)", "[A]", "A.", "A)", "A:"
     s = s.replace(/^\s*(?:\([A-Za-z0-9Đđ]\)|\[[A-Za-z0-9Đđ]\]|[A-Za-z0-9Đđ①-⑩❶-❿Ⓐ-Ⓗ][\.\)\:\/])\s*/, '').trim();
-    s = s.replace(/\s*(?:clear my choice|xóa lựa chọn|flag question)\s*$/i, '').trim();
+    s = s.replace(/\s*(?:clear my choice|xóa lựa chọn|flag question|bạn đã chọn|đã chọn)\s*$/i, '').trim();
 
     // Xóa điểm số rò rỉ cuối option, ví dụ: "(Điểm: 0.25)", "Điểm: 0/0.25", "Marked out of 1.00"
     s = s.replace(/\s*\(?(?:Điểm|Điểm số|Điểm đạt|Marked out of|Mark|Points?)\s*:\s*[\d\.,\/]+\)?\s*$/i, '').trim();
@@ -821,6 +821,8 @@
   function extractQuizContainers(passageMap) {
     const scanRoot = getMainScanRoot() || (typeof document !== 'undefined' ? (document.body || document) : null);
     const containerSelectors = [
+      'article',
+      'article.rounded-2xl',
       '.que',
       '.yh-question-card',
       '.question-card',
@@ -4770,92 +4772,115 @@ ${JSON.stringify(payload, null, 2)}
     (document.fullscreenElement || document.body || document.documentElement).appendChild(snipOverlay);
   }
 
-  // Bắt phím tắt trực tiếp trên trang khi làm bài:
+  // Bắt phím tắt & chuột trực tiếp trên trang khi làm bài (Kháng chặn Anti-Cheat 100%):
   // - Alt + H: Từng câu một (không chuyển trang)
   // - Alt + K: Tự động liên tiếp (tự qua trang liên tục)
   // - Alt + Y: Chụp màn hình vùng chọn để giải
   // - Escape: Dừng mọi tiến trình giải & tắt tự qua trang
+  // - Chuột giữa (Con lăn / Button 1): Tự động giải liên tiếp
+  // - Triple Click chuột trái: Chụp màn hình vùng chọn để giải
   if (typeof window !== 'undefined') {
-    window.addEventListener('keydown', (e) => {
-    const isEsc = e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
-    if (isEsc) {
-      if (isSolvingProcess || isAutoAdvanceEnabled() || isSnippingActive) {
-        e.preventDefault();
-        e.stopPropagation();
-        stopCurrentAutoSolve();
-      }
-      return;
-    }
-
-    const isAltH = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H' || e.code === 'KeyH'));
-    if (isAltH) {
-      e.preventDefault();
-      e.stopPropagation();
-      triggerSingleQuestionSolve();
-      return;
-    }
-
-    const isAltK = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK'));
-    if (isAltK) {
-      e.preventDefault();
-      e.stopPropagation();
-      triggerContinuousAutoSolve();
-      return;
-    }
-
-    const isAltY = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY'));
-    if (isAltY) {
-      e.preventDefault();
-      e.stopPropagation();
-      startStealthSnipping();
-      return;
-    }
-  }, true);
-
-  // Click Chuột Trái 3 lần liên tiếp (Triple Click): Chụp màn hình vùng chọn & Giải
-  let tripleClickCount = 0;
-  let tripleClickTimer = null;
-
-  window.addEventListener('click', (e) => {
-    if (e.button === 0) { // Chuột trái
-      if (e.detail >= 3) {
-        e.preventDefault();
-        e.stopPropagation();
-        startStealthSnipping();
+    const handleKeyDownCapture = (e) => {
+      const isEsc = e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
+      if (isEsc) {
+        if (isSolvingProcess || isAutoAdvanceEnabled() || isSnippingActive) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation?.();
+          stopCurrentAutoSolve();
+        }
         return;
       }
 
-      tripleClickCount++;
-      if (tripleClickCount === 1) {
-        clearTimeout(tripleClickTimer);
-        tripleClickTimer = setTimeout(() => {
-          tripleClickCount = 0;
-        }, 500);
-      } else if (tripleClickCount >= 3) {
-        clearTimeout(tripleClickTimer);
-        tripleClickCount = 0;
+      const isAltH = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H' || e.code === 'KeyH'));
+      if (isAltH) {
         e.preventDefault();
         e.stopPropagation();
-        startStealthSnipping();
+        e.stopImmediatePropagation?.();
+        triggerSingleQuestionSolve();
+        return;
       }
-    }
-  }, true);
 
-  // Click con lăn chuột (Middle Mouse Click - button 1): Giải toàn bộ câu hỏi trên trang
-  window.addEventListener('mousedown', (e) => {
-    if (e.button === 1) { // 1 là nút con lăn chuột
-      e.preventDefault();
-      e.stopPropagation();
-      triggerContinuousAutoSolve();
-    }
-  }, true);
+      const isAltK = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK'));
+      if (isAltK) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        triggerContinuousAutoSolve();
+        return;
+      }
 
-  window.addEventListener('auxclick', (e) => {
-    if (e.button === 1) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  }, true);
+      const isAltY = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY'));
+      if (isAltY) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        startStealthSnipping();
+        return;
+      }
+    };
+
+    // Gắn capture listener lên cả window, document và documentElement
+    [window, document, document.documentElement].filter(Boolean).forEach(target => {
+      try {
+        target.addEventListener('keydown', handleKeyDownCapture, { capture: true, passive: false });
+      } catch (err) {}
+    });
+
+    // Click Chuột Trái 3 lần liên tiếp (Triple Click): Chụp màn hình vùng chọn & Giải
+    let tripleClickCount = 0;
+    let tripleClickTimer = null;
+
+    const handleClickCapture = (e) => {
+      if (e.button === 0) { // Chuột trái
+        if (e.detail >= 3) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation?.();
+          startStealthSnipping();
+          return;
+        }
+
+        tripleClickCount++;
+        if (tripleClickCount === 1) {
+          clearTimeout(tripleClickTimer);
+          tripleClickTimer = setTimeout(() => {
+            tripleClickCount = 0;
+          }, 500);
+        } else if (tripleClickCount >= 3) {
+          clearTimeout(tripleClickTimer);
+          tripleClickCount = 0;
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation?.();
+          startStealthSnipping();
+        }
+      }
+    };
+
+    [window, document, document.documentElement].filter(Boolean).forEach(target => {
+      try {
+        target.addEventListener('click', handleClickCapture, { capture: true, passive: false });
+      } catch (err) {}
+    });
+
+    // Click con lăn chuột (Middle Mouse Click - button 1 / buttons 4 / which 2): Giải toàn bộ câu hỏi trên trang
+    const handleMiddleClickCapture = (e) => {
+      if (e.button === 1 || e.buttons === 4 || e.which === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        triggerContinuousAutoSolve();
+      }
+    };
+
+    ['pointerdown', 'mousedown', 'auxclick'].forEach(evtName => {
+      [window, document, document.documentElement].filter(Boolean).forEach(target => {
+        try {
+          target.addEventListener(evtName, handleMiddleClickCapture, { capture: true, passive: false });
+        } catch (err) {}
+      });
+    });
 
     window.addEventListener('pagehide', () => {
       try {

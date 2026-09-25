@@ -215,7 +215,7 @@ if (typeof chrome !== 'undefined') {
 
   ensureDefaultSettings();
 
-  // Hàm kích hoạt giải ngầm an toàn trên tab
+  // Hàm kích hoạt giải ngầm an toàn trên tab (hỗ trợ tất cả frames / iframes / popups)
   async function sendTriggerAutoSolve(tabId, url, action = 'TRIGGER_CONTINUOUS_SOLVE') {
     if (!tabId) return;
     if (url && (url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://'))) {
@@ -225,13 +225,27 @@ if (typeof chrome !== 'undefined') {
       if (chrome.runtime.lastError) {
         try {
           await chrome.scripting.executeScript({
-            target: { tabId: tabId },
+            target: { tabId: tabId, allFrames: true },
             files: ['config.js', 'content.js']
           });
           setTimeout(() => {
             chrome.tabs.sendMessage(tabId, { action: action }, () => {});
-          }, 150);
+          }, 100);
         } catch (injectErr) {}
+      }
+    });
+  }
+
+  // Tự động gắn content script ngay khi tab hoặc popup cửa sổ mới được tạo ra
+  if (chrome.tabs?.onUpdated) {
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
+        if (tab?.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://') && !tab.url.startsWith('about:') && !tab.url.startsWith('chrome-extension://')) {
+          chrome.scripting?.executeScript({
+            target: { tabId: tabId, allFrames: true },
+            files: ['config.js', 'content.js']
+          }).catch(() => {});
+        }
       }
     });
   }
