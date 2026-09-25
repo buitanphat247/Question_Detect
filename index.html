@@ -247,14 +247,31 @@ Giả sử ta xây dựng một cách cài đặt mới là Implementation C. C 
       }
     }
 
+    var isNavigating = false;
     function goToQuestion(index) {
       if (index < 0 || index >= totalQuestions) return;
+      if (isNavigating) return; // Debounce guard: Ngăn chặn bấm chuyển câu quá nhanh
+      isNavigating = true;
+
+      var nextBtn = document.getElementById('next-question-btn');
+      var prevBtn = document.getElementById('prev-question-btn');
+      if (nextBtn) nextBtn.style.opacity = '0.6';
+      if (prevBtn) prevBtn.style.opacity = '0.6';
+
       currentQuestionIndex = index;
       updateUI();
+
       var targetQ = questionElements[index];
       if (targetQ && typeof targetQ.scrollIntoView === 'function') {
         targetQ.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
+
+      // Khoảng debounce tự nhiên (400ms) để thao tác mô phỏng người dùng thật
+      setTimeout(function () {
+        isNavigating = false;
+        if (nextBtn) nextBtn.style.opacity = '1';
+        if (prevBtn) prevBtn.style.opacity = '1';
+      }, 400);
     }
 
     function nextQuestion() {

@@ -53,9 +53,9 @@ var isHumanDelayEnabled = (typeof isHumanDelayEnabled === 'function') ? isHumanD
 var getHumanDelaySettings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings : function () {
   return {
     enabled: typeof APP_CONFIG !== 'undefined' ? APP_CONFIG.ENABLE_HUMAN_DELAY !== false : true,
-    msPerWord: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MS_PER_WORD) || 25,
-    minMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MIN_MS) || 1200,
-    maxMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MAX_MS) || 6000
+    msPerWord: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MS_PER_WORD) || 50,
+    minMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MIN_MS) || 2800,
+    maxMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MAX_MS) || 15000
   };
 };
 

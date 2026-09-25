@@ -4014,7 +4014,9 @@ ${JSON.stringify(payload, null, 2)}
     return null;
   }
 
-  function clickNextQuestionPage() {
+  let isTransitioningPage = false;
+  async function clickNextQuestionPage() {
+    if (isTransitioningPage) return false;
     const nextBtn = findNextPageButton();
     if (!nextBtn) {
       setAutoAdvanceEnabled(false);
@@ -4023,38 +4025,50 @@ ${JSON.stringify(payload, null, 2)}
       return false;
     }
 
-    console.log('[AutoSolver AutoNext] Đã chọn xong, tự chuyển Trang tiếp...');
-    setAutoAdvanceEnabled(true);
+    isTransitioningPage = true;
+    try {
+      // Debounce tự nhiên trước khi chuyển trang (2.8s -> 4.3s) để chống bị nghi ngờ dùng tool
+      const transitionDelay = Math.floor(2800 + Math.random() * 1500);
+      console.log(`[AutoSolver Transition] Đang chờ debounce tự nhiên (~${(transitionDelay / 1000).toFixed(1)}s) trước khi chuyển trang...`);
+      showStealthToast(`⏳ Đang chờ chuyển trang tự nhiên (~${(transitionDelay / 1000).toFixed(1)}s)...`, 'info', transitionDelay);
+      await sleepAsync(transitionDelay);
 
-    // Ghi lại nội dung thẻ câu hỏi hiện tại để biết khi nào React render xong câu mới
-    const currentCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
-    const oldQuestionText = currentCard ? (currentCard.innerText || currentCard.textContent || '') : '';
-    const oldUrl = window.location.href;
+      console.log('[AutoSolver AutoNext] Đã chọn xong, chuyển Trang tiếp...');
 
-    // Thực hiện click mạnh vào nút Tiếp theo
-    forceClickTarget(nextBtn, nextBtn);
+      // Ghi lại nội dung thẻ câu hỏi hiện tại để biết khi nào React render xong câu mới
+      const currentCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
+      const oldQuestionText = currentCard ? (currentCard.innerText || currentCard.textContent || '') : '';
+      const oldUrl = window.location.href;
 
-    // Hỗ trợ SPA/React: Polling kiểm tra khi nào câu hỏi mới xuất hiện
-    let pollCount = 0;
-    const maxPoll = 25; // 25 * 200ms = 5s
-    const pollInterval = setInterval(() => {
-      pollCount++;
-      const newCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
-      const newQuestionText = newCard ? (newCard.innerText || newCard.textContent || '') : '';
-      const isContentChanged = newCard && newQuestionText !== oldQuestionText;
-      const isUrlChanged = window.location.href !== oldUrl;
+      // Thực hiện click mạnh vào nút Tiếp theo
+      forceClickTarget(nextBtn, nextBtn);
 
-      if (isContentChanged || isUrlChanged || pollCount >= maxPoll) {
-        clearInterval(pollInterval);
-        setTimeout(() => {
-          if (!isSolvingProcess && isAutoAdvanceEnabled()) {
-            triggerContinuousAutoSolve();
-          }
-        }, 400);
-      }
-    }, 200);
+      // Hỗ trợ SPA/React: Polling kiểm tra khi nào câu hỏi mới xuất hiện
+      let pollCount = 0;
+      const maxPoll = 25; // 25 * 200ms = 5s
+      const pollInterval = setInterval(() => {
+        pollCount++;
+        const newCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
+        const newQuestionText = newCard ? (newCard.innerText || newCard.textContent || '') : '';
+        const isContentChanged = newCard && newQuestionText !== oldQuestionText;
+        const isUrlChanged = window.location.href !== oldUrl;
 
-    return true;
+        if (isContentChanged || isUrlChanged || pollCount >= maxPoll) {
+          clearInterval(pollInterval);
+          isTransitioningPage = false;
+          setTimeout(() => {
+            if (!isSolvingProcess && isAutoAdvanceEnabled()) {
+              triggerContinuousAutoSolve();
+            }
+          }, 400);
+        }
+      }, 200);
+
+      return true;
+    } catch (err) {
+      isTransitioningPage = false;
+      return false;
+    }
   }
 
   let isSolvingProcess = false;
@@ -4302,9 +4316,9 @@ ${JSON.stringify(payload, null, 2)}
       return;
     }
     isSolvingProcess = true;
-    setAutoAdvanceEnabled(true);
+    setAutoAdvanceEnabled(false); // Tuyệt đối KHÔNG tự động chuyển qua trang
     const currentSolveSessionId = ++solveSessionId;
-    showStealthToast('🚀 [Alt+K] Bật TỰ ĐỘNG LIÊN TIẾP (Auto-advance ON)', 'info', 2000);
+    showStealthToast('🚀 [Alt+K] Tự động giải toàn bộ câu hỏi trên trang...', 'info', 2000);
 
     try {
       let apiKey = DEFAULT_API_KEY;
@@ -4501,16 +4515,8 @@ ${JSON.stringify(payload, null, 2)}
 
       if (!isSolveSessionActive(currentSolveSessionId)) return;
       console.log(`[AutoSolver Alt+K] Hoàn tất! Đã hoàn thành ${successCount}/${questions.length} câu.`);
-      if (isAutoAdvanceEnabled() && isSolveSessionActive(currentSolveSessionId)) {
-        const nextBtn = findNextPageButton();
-        if (nextBtn) {
-          showStealthToast(`✅ Đã giải xong trang (${successCount}/${questions.length} câu). Đang chuyển trang tiếp...`, 'success', 1500);
-          clickNextQuestionPage();
-        } else {
-          showStealthToast(`🏁 Đã hoàn thành toàn bộ bài thi! (${successCount} câu)`, 'success', 3000);
-          setAutoAdvanceEnabled(false);
-        }
-      }
+      setAutoAdvanceEnabled(false);
+      showStealthToast(`✅ Đã giải xong ${successCount}/${questions.length} câu trên trang!`, 'success', 3500);
     } catch (e) {
       console.warn('[AutoSolver Alt+K] Lỗi:', e);
       showStealthToast(`Lỗi: ${e.message || e}`, 'error', 3000);
