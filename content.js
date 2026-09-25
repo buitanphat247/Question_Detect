@@ -1912,9 +1912,45 @@
   function isCacheActive() {
     if (typeof isSupabaseCacheEnabled === 'function') return isSupabaseCacheEnabled();
     return CFG.ENABLE_SUPABASE_CACHE === true;
-  } // Model phụ đối chiếu chính thức: Gemini 3.5 Flash GA
-  
-  // DANH SÁCH MODEL BACKUP ĐA TẦNG (NHẤT, NHÌ, BA) - 100% NGOÀI GPT, PHẢN HỒI ~1S
+  }
+
+  function sleepAsync(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // ==========================================
+  // HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
+  // ==========================================
+  function calculateHumanReadingDelay(question) {
+    const settings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings() : {
+      enabled: typeof CFG.ENABLE_HUMAN_DELAY !== 'undefined' ? CFG.ENABLE_HUMAN_DELAY !== false : true,
+      msPerWord: CFG.HUMAN_DELAY_MS_PER_WORD || 25,
+      minMs: CFG.HUMAN_DELAY_MIN_MS || 1200,
+      maxMs: CFG.HUMAN_DELAY_MAX_MS || 6000
+    };
+
+    if (!settings.enabled || !question) {
+      return { totalDelay: 0, wordCount: 0 };
+    }
+
+    let totalText = (question.passage || '') + ' ' + (question.title || '');
+    if (question.type === 'true_false_group' && Array.isArray(question.items)) {
+      totalText += ' ' + question.items.map(it => it.statement || '').join(' ');
+    } else if (Array.isArray(question.options)) {
+      totalText += ' ' + question.options.map(opt => opt.text || '').join(' ');
+    }
+
+    const words = totalText.trim().split(/\s+/).filter(Boolean);
+    const wordCount = words.length;
+
+    // Tốc độ đọc người thật:
+    // Base minMs (mặc định 1.2s) + (số chữ * msPerWord) + Jitter ngẫu nhiên (+- 350ms)
+    const jitter = Math.floor(Math.random() * 700) - 350;
+    let totalDelay = settings.minMs + (wordCount * settings.msPerWord) + jitter;
+    totalDelay = Math.max(settings.minMs, Math.min(settings.maxMs, totalDelay));
+
+    return { totalDelay, wordCount };
+  }
   const BACKUP_MODELS = [
     'gemini-2.5-flash',      // Backup 1 (Nhất) - Siêu nhanh 1.3s, native multimodal vision, cực kỳ chuẩn xác
     'gemini-3.7-flash',      // Backup 2 (Nhì)  - Thế hệ Gemini 3.7 cân bằng trí tuệ và tốc độ 1.8s
@@ -4073,6 +4109,7 @@ ${JSON.stringify(payload, null, 2)}
     isSolvingProcess = true;
     setAutoAdvanceEnabled(false); // Đảm bảo tắt tự chuyển trang
     const currentSolveSessionId = ++solveSessionId;
+    const solveStartTime = Date.now();
 
     try {
       let apiKey = DEFAULT_API_KEY;
@@ -4134,7 +4171,7 @@ ${JSON.stringify(payload, null, 2)}
         } catch (e) {}
       }
 
-      // BƯỚC 1: Nếu bật Cache Supabase, kiểm tra ngân hàng câu hỏi trước (0ms)
+      // BƯỚC 1: Nếu bật Cache Supabase, kiểm tra ngân hàng câu hỏi trước
       let questionHash = null;
       if (isCacheActive()) {
         const opts = targetQ.type === 'true_false_group' ? (targetQ.items || []) : (targetQ.options || []);
@@ -4143,10 +4180,18 @@ ${JSON.stringify(payload, null, 2)}
           const cachedMap = await checkSupabaseCacheBatch([questionHash]);
           const cachedItem = cachedMap[questionHash];
           if (cachedItem && cachedItem.answer) {
-            console.log(`⚡ [Supabase Cache] Câu ${qNumLabel} ĐÃ CÓ trong Database -> Tích chọn ngay lập tức!`);
+            console.log(`⚡ [Supabase Cache] Câu ${qNumLabel} ĐÃ CÓ trong Database.`);
+            const { totalDelay, wordCount } = calculateHumanReadingDelay(targetQ);
+            const elapsed = Date.now() - solveStartTime;
+            if (totalDelay > elapsed) {
+              const waitMs = totalDelay - elapsed;
+              showStealthToast(`📖 [DB Cache] Đọc câu (${wordCount} chữ, ~${(waitMs / 1000).toFixed(1)}s)...`, 'info', waitMs);
+              await sleepAsync(waitMs);
+              if (!isSolveSessionActive(currentSolveSessionId)) return;
+            }
             if (applySolvedAnswer(targetQ, cachedItem.answer)) {
               const ansLabel = targetQ.type === 'true_false_group' ? 'Đúng/Sai' : (cachedItem.answer.answer || 'OK');
-              showStealthToast(`⚡ [DB Cache] Câu ${qNumLabel}: ${ansLabel} (0ms)`, 'success', 2500);
+              showStealthToast(`⚡ [DB Cache] Câu ${qNumLabel}: ${ansLabel}`, 'success', 2500);
               highlightQuestion(targetQ.id);
               return;
             }
@@ -4177,6 +4222,15 @@ ${JSON.stringify(payload, null, 2)}
         console.warn(`[Alt+H] Câu ${qNumLabel}: Không đạt đồng thuận hoặc lỗi:`, resp?.reason);
         showStealthToast(`❌ Câu ${qNumLabel}: ${resp?.reason || 'Không đạt đồng thuận'}`, 'error', 3000);
         return;
+      }
+
+      // Đảm bảo đủ độ trễ đọc tự nhiên theo số chữ trước khi tích chọn
+      const { totalDelay, wordCount } = calculateHumanReadingDelay(targetQ);
+      const elapsed = Date.now() - solveStartTime;
+      if (totalDelay > elapsed) {
+        const waitMs = totalDelay - elapsed;
+        await sleepAsync(waitMs);
+        if (!isSolveSessionActive(currentSolveSessionId)) return;
       }
 
       const applied = applySolvedAnswer(targetQ, resp.data);
@@ -4283,15 +4337,21 @@ ${JSON.stringify(payload, null, 2)}
       const needAiSolve = [];
 
       for (let i = 0; i < questions.length; i++) {
+        if (!isSolveSessionActive(currentSolveSessionId)) return;
         const q = questions[i];
         const hash = questionHashes[i] || null;
         const cachedItem = hash ? cachedMap[hash] : null;
 
         if (cachedItem && cachedItem.answer) {
           const qLabel = q.num || (i + 1);
-          console.log(`⚡ [Supabase Cache] Câu ${qLabel} ĐÃ CÓ trong Database -> Tích chọn ngay lập tức!`);
+          const { totalDelay, wordCount } = calculateHumanReadingDelay(q);
+          showStealthToast(`📖 [DB Cache] Đọc câu ${qLabel} (${wordCount} chữ, ~${(totalDelay / 1000).toFixed(1)}s)...`, 'info', totalDelay);
+          await sleepAsync(totalDelay);
+          if (!isSolveSessionActive(currentSolveSessionId)) return;
           if (applySolvedAnswer(q, cachedItem.answer)) {
             successCount++;
+            highlightQuestion(q.id);
+            console.log(`⚡ [Supabase Cache] Câu ${qLabel} ĐÃ CÓ trong Database -> Đã tích chọn sau ${totalDelay}ms.`);
           }
         } else {
           needAiSolve.push({
@@ -4304,8 +4364,7 @@ ${JSON.stringify(payload, null, 2)}
       }
 
       if (successCount > 0) {
-        console.log(`⚡ [Supabase Cache] Đã lấy ngay ${successCount}/${questions.length} câu từ Database!`);
-        showStealthToast(`⚡ Lấy ${successCount}/${questions.length} câu từ Database!`, 'info', 2000);
+        console.log(`⚡ [Supabase Cache] Đã lấy xong ${successCount} câu từ Database!`);
       }
 
       if (needAiSolve.length > 0) {
@@ -4354,9 +4413,13 @@ ${JSON.stringify(payload, null, 2)}
 
                 const answerData = mergeConsensusAnswer(item.q, firstResult, secondResult);
                 if (!isSolveSessionActive(currentSolveSessionId)) return;
+                const { totalDelay } = calculateHumanReadingDelay(item.q);
+                await sleepAsync(Math.min(2500, totalDelay));
+                if (!isSolveSessionActive(currentSolveSessionId)) return;
                 if (applySolvedAnswer(item.q, answerData)) {
                   solvedKeys.add(item.solveKey);
                   successCount++;
+                  highlightQuestion(item.q.id);
                   console.log(`[AutoSolver Batch] Consensus chọn câu ${item.q.num}: ${answerData.answer || 'Đúng/Sai'} (${successCount}/${questions.length})`);
                   if (isCacheActive() && item.hash) {
                     saveToSupabaseCache(item.hash, item.q.title, null, answerData);
@@ -4388,8 +4451,12 @@ ${JSON.stringify(payload, null, 2)}
               }
 
               if (!isSolveSessionActive(currentSolveSessionId)) return;
+              const { totalDelay } = calculateHumanReadingDelay(q);
+              await sleepAsync(Math.min(2500, totalDelay));
+              if (!isSolveSessionActive(currentSolveSessionId)) return;
               if (applySolvedAnswer(q, resp.data)) {
                 successCount++;
+                highlightQuestion(q.id);
                 console.log(`[AutoSolver Parallel] Consensus chọn câu ${qLabel}: ${resp.data.answer || 'Đúng/Sai'} (${successCount}/${questions.length})`);
                 if (isCacheActive() && item.hash) {
                   saveToSupabaseCache(item.hash, q.title, null, resp.data);

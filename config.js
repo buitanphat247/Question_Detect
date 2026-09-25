@@ -8,7 +8,7 @@ if (typeof console !== 'undefined') {
 
 // =========================================================================
 // CONFIGURATION SYSTEM (ĐỒNG BỘ TỰ ĐỘNG TỪ .ENV)
-// Tự động sinh bởi sync_env.js vào lúc: 11:34:18 25/9/2026
+// Tự động sinh bởi sync_env.js vào lúc: 15:01:09 25/9/2026
 // =========================================================================
 
 var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG : {
@@ -25,7 +25,13 @@ var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG 
   DEFAULT_MODEL: 'claude-opus-4-8',
   CONSENSUS_MODEL: 'gemini-3.5-flash',
   DETECT_MODEL: 'gemini-3.5-flash',
-  KEY4U_API_KEY: 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5'
+  KEY4U_API_KEY: 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5',
+
+  // 4. HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
+  ENABLE_HUMAN_DELAY: true,          // true = BẬT độ trễ đọc tự nhiên theo số chữ, false = TẮT
+  HUMAN_DELAY_MS_PER_WORD: 25,       // ~25ms mỗi từ
+  HUMAN_DELAY_MIN_MS: 1200,          // Độ trễ tối thiểu (1.2s)
+  HUMAN_DELAY_MAX_MS: 6000           // Độ trễ tối đa (6.0s)
 };
 
 var isReasoningEnabled = (typeof isReasoningEnabled === 'function') ? isReasoningEnabled : function () {
@@ -40,11 +46,26 @@ var isSupabaseCacheEnabled = (typeof isSupabaseCacheEnabled === 'function') ? is
   return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_SUPABASE_CACHE === true;
 };
 
+var isHumanDelayEnabled = (typeof isHumanDelayEnabled === 'function') ? isHumanDelayEnabled : function () {
+  return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_HUMAN_DELAY !== false;
+};
+
+var getHumanDelaySettings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings : function () {
+  return {
+    enabled: typeof APP_CONFIG !== 'undefined' ? APP_CONFIG.ENABLE_HUMAN_DELAY !== false : true,
+    msPerWord: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MS_PER_WORD) || 25,
+    minMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MIN_MS) || 1200,
+    maxMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MAX_MS) || 6000
+  };
+};
+
 if (typeof globalThis !== 'undefined') {
   globalThis.APP_CONFIG = APP_CONFIG;
   globalThis.isReasoningEnabled = isReasoningEnabled;
   globalThis.getReasoningEffort = getReasoningEffort;
   globalThis.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
+  globalThis.isHumanDelayEnabled = isHumanDelayEnabled;
+  globalThis.getHumanDelaySettings = getHumanDelaySettings;
 }
 
 if (typeof window !== 'undefined') {
@@ -52,6 +73,8 @@ if (typeof window !== 'undefined') {
   window.isReasoningEnabled = isReasoningEnabled;
   window.getReasoningEffort = getReasoningEffort;
   window.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
+  window.isHumanDelayEnabled = isHumanDelayEnabled;
+  window.getHumanDelaySettings = getHumanDelaySettings;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -59,6 +82,8 @@ if (typeof module !== 'undefined' && module.exports) {
     APP_CONFIG,
     isReasoningEnabled,
     getReasoningEffort,
-    isSupabaseCacheEnabled
+    isSupabaseCacheEnabled,
+    isHumanDelayEnabled,
+    getHumanDelaySettings
   };
 }
