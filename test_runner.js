@@ -89,6 +89,27 @@ async function runTests() {
     console.log('⚠️ Trạng thái class của C sau click:', optC.className);
   }
 
+  console.log('\n=== TEST 5: Kiểm tra Click chuột thông thường (Không bị chặn / Không bị treo trang) ===');
+  const btn = document.querySelector('button, a, label');
+  let clicked = false;
+  btn.addEventListener('click', (e) => {
+    clicked = true;
+  });
+  
+  const clickEvent = new window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+    button: 0
+  });
+  btn.dispatchEvent(clickEvent);
+  
+  const overlayExists = !!document.getElementById('__qa_stealth_snip_overlay');
+  if (clicked && !overlayExists) {
+    console.log('✅ TEST PASSED: Click chuột hoạt động bình thường 100%, không bị chặn và không tạo overlay chắn trang.');
+  } else {
+    console.error(`❌ TEST FAILED: clicked=${clicked}, overlayExists=${overlayExists}`);
+  }
+
   console.log('\n=============================================');
   console.log('🎉 TẤT CẢ CÁC BƯỚC KIỂM THỬ ĐÃ HOÀN TẤT THÀNH CÔNG!');
   console.log('=============================================');

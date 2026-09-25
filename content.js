@@ -4827,53 +4827,14 @@ ${JSON.stringify(payload, null, 2)}
       }
     };
 
-    // Gắn capture listener lên cả window, document và documentElement
-    [window, document, document.documentElement].filter(Boolean).forEach(target => {
-      try {
-        target.addEventListener('keydown', handleKeyDownCapture, { capture: true, passive: false });
-      } catch (err) {}
-    });
+    // Gắn capture listener phím tắt duy nhất lên window
+    try {
+      window.addEventListener('keydown', handleKeyDownCapture, { capture: true, passive: false });
+    } catch (err) {}
 
-    // Click Chuột Trái 3 lần liên tiếp (Triple Click): Chụp màn hình vùng chọn & Giải
-    let tripleClickCount = 0;
-    let tripleClickTimer = null;
-
-    const handleClickCapture = (e) => {
-      if (e.button === 0) { // Chuột trái
-        if (e.detail >= 3) {
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation?.();
-          startStealthSnipping();
-          return;
-        }
-
-        tripleClickCount++;
-        if (tripleClickCount === 1) {
-          clearTimeout(tripleClickTimer);
-          tripleClickTimer = setTimeout(() => {
-            tripleClickCount = 0;
-          }, 500);
-        } else if (tripleClickCount >= 3) {
-          clearTimeout(tripleClickTimer);
-          tripleClickCount = 0;
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation?.();
-          startStealthSnipping();
-        }
-      }
-    };
-
-    [window, document, document.documentElement].filter(Boolean).forEach(target => {
-      try {
-        target.addEventListener('click', handleClickCapture, { capture: true, passive: false });
-      } catch (err) {}
-    });
-
-    // Click con lăn chuột (Middle Mouse Click - button 1 / buttons 4 / which 2): Giải toàn bộ câu hỏi trên trang
+    // Click con lăn chuột (Middle Mouse Click - button 1): Tự động giải liên tiếp
     const handleMiddleClickCapture = (e) => {
-      if (e.button === 1 || e.buttons === 4 || e.which === 2) {
+      if (e.button === 1) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation?.();
@@ -4881,13 +4842,9 @@ ${JSON.stringify(payload, null, 2)}
       }
     };
 
-    ['pointerdown', 'mousedown', 'auxclick'].forEach(evtName => {
-      [window, document, document.documentElement].filter(Boolean).forEach(target => {
-        try {
-          target.addEventListener(evtName, handleMiddleClickCapture, { capture: true, passive: false });
-        } catch (err) {}
-      });
-    });
+    try {
+      window.addEventListener('auxclick', handleMiddleClickCapture, { capture: true, passive: false });
+    } catch (err) {}
 
     window.addEventListener('pagehide', () => {
       try {
