@@ -42,9 +42,9 @@ function sync() {
   const apiKey = envVars.KEY4U_API_KEY || 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
 
   const enableHumanDelay = envVars.ENABLE_HUMAN_DELAY ? envVars.ENABLE_HUMAN_DELAY.toLowerCase() === 'true' : true;
-  const humanDelayMsPerWord = parseInt(envVars.HUMAN_DELAY_MS_PER_WORD || '25', 10);
-  const humanDelayMinMs = parseInt(envVars.HUMAN_DELAY_MIN_MS || '1200', 10);
-  const humanDelayMaxMs = parseInt(envVars.HUMAN_DELAY_MAX_MS || '6000', 10);
+  const humanDelayMsPerWord = parseInt(envVars.HUMAN_DELAY_MS_PER_WORD || '50', 10);
+  const humanDelayMinMs = parseInt(envVars.HUMAN_DELAY_MIN_MS || '2800', 10);
+  const humanDelayMaxMs = parseInt(envVars.HUMAN_DELAY_MAX_MS || '15000', 10);
 
   const newConfigContent = `// SILENT STEALTH MODE: Vô hiệu hóa toàn bộ console để DevTools luôn sạch sẽ 100%
 if (typeof console !== 'undefined') {
@@ -77,9 +77,9 @@ var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG 
 
   // 4. HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
   ENABLE_HUMAN_DELAY: ${enableHumanDelay},          // true = BẬT độ trễ đọc tự nhiên theo số chữ, false = TẮT
-  HUMAN_DELAY_MS_PER_WORD: ${humanDelayMsPerWord},       // ~25ms mỗi từ
-  HUMAN_DELAY_MIN_MS: ${humanDelayMinMs},          // Độ trễ tối thiểu (1.2s)
-  HUMAN_DELAY_MAX_MS: ${humanDelayMaxMs}           // Độ trễ tối đa (6.0s)
+  HUMAN_DELAY_MS_PER_WORD: ${humanDelayMsPerWord},       // ~50ms mỗi từ (Mô phỏng đọc & suy ngẫm thực tế)
+  HUMAN_DELAY_MIN_MS: ${humanDelayMinMs},          // Độ trễ tối thiểu (2.8s cho câu ngắn)
+  HUMAN_DELAY_MAX_MS: ${humanDelayMaxMs}           // Độ trễ tối đa (15.0s cho bài đọc dài)
 };
 
 var isReasoningEnabled = (typeof isReasoningEnabled === 'function') ? isReasoningEnabled : function () {

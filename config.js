@@ -8,7 +8,7 @@ if (typeof console !== 'undefined') {
 
 // =========================================================================
 // CONFIGURATION SYSTEM (ĐỒNG BỘ TỰ ĐỘNG TỪ .ENV)
-// Tự động sinh bởi sync_env.js vào lúc: 15:01:09 25/9/2026
+// Tự động sinh bởi sync_env.js vào lúc: 15:12:57 25/9/2026
 // =========================================================================
 
 var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG : {
@@ -29,9 +29,9 @@ var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG 
 
   // 4. HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
   ENABLE_HUMAN_DELAY: true,          // true = BẬT độ trễ đọc tự nhiên theo số chữ, false = TẮT
-  HUMAN_DELAY_MS_PER_WORD: 25,       // ~25ms mỗi từ
-  HUMAN_DELAY_MIN_MS: 1200,          // Độ trễ tối thiểu (1.2s)
-  HUMAN_DELAY_MAX_MS: 6000           // Độ trễ tối đa (6.0s)
+  HUMAN_DELAY_MS_PER_WORD: 50,       // ~50ms mỗi từ (Mô phỏng đọc & suy ngẫm thực tế)
+  HUMAN_DELAY_MIN_MS: 2800,          // Độ trễ tối thiểu (2.8s cho câu ngắn)
+  HUMAN_DELAY_MAX_MS: 15000           // Độ trễ tối đa (15.0s cho bài đọc dài)
 };
 
 var isReasoningEnabled = (typeof isReasoningEnabled === 'function') ? isReasoningEnabled : function () {

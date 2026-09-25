@@ -1924,9 +1924,9 @@
   function calculateHumanReadingDelay(question) {
     const settings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings() : {
       enabled: typeof CFG.ENABLE_HUMAN_DELAY !== 'undefined' ? CFG.ENABLE_HUMAN_DELAY !== false : true,
-      msPerWord: CFG.HUMAN_DELAY_MS_PER_WORD || 25,
-      minMs: CFG.HUMAN_DELAY_MIN_MS || 1200,
-      maxMs: CFG.HUMAN_DELAY_MAX_MS || 6000
+      msPerWord: CFG.HUMAN_DELAY_MS_PER_WORD || 50,
+      minMs: CFG.HUMAN_DELAY_MIN_MS || 2800,
+      maxMs: CFG.HUMAN_DELAY_MAX_MS || 15000
     };
 
     if (!settings.enabled || !question) {
@@ -1943,9 +1943,9 @@
     const words = totalText.trim().split(/\s+/).filter(Boolean);
     const wordCount = words.length;
 
-    // Tốc độ đọc người thật:
-    // Base minMs (mặc định 1.2s) + (số chữ * msPerWord) + Jitter ngẫu nhiên (+- 350ms)
-    const jitter = Math.floor(Math.random() * 700) - 350;
+    // Tốc độ đọc & phân tích như người thật trong phòng thi:
+    // Base minMs (mặc định 2.8s) + (số chữ * 50ms) + Jitter ngẫu nhiên (+- 800ms)
+    const jitter = Math.floor(Math.random() * 1600) - 800;
     let totalDelay = settings.minMs + (wordCount * settings.msPerWord) + jitter;
     totalDelay = Math.max(settings.minMs, Math.min(settings.maxMs, totalDelay));
 
@@ -4229,6 +4229,7 @@ ${JSON.stringify(payload, null, 2)}
       const elapsed = Date.now() - solveStartTime;
       if (totalDelay > elapsed) {
         const waitMs = totalDelay - elapsed;
+        showStealthToast(`📖 Đang đọc & đối chiếu (${wordCount} chữ, ~${(waitMs / 1000).toFixed(1)}s)...`, 'info', waitMs);
         await sleepAsync(waitMs);
         if (!isSolveSessionActive(currentSolveSessionId)) return;
       }
