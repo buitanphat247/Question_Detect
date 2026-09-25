@@ -862,7 +862,7 @@
       let qNum = idx + 1;
       const numElem = box.querySelector(
         '.yh-question-stem__label, .qno, .no, .info .no, .info .header, .info h3, ' +
-        '[class*="question-num"], [class*="q-num"], .question-number, h3, h4, h5'
+        '[class*="question-num"], [class*="q-num"], .question-number, [class*="bg-sky"], [class*="bg-blue"], span, h3, h4, h5'
       );
       if (numElem) {
         const text = cleanText(numElem.textContent);
@@ -876,7 +876,8 @@
       // Tìm nội dung câu hỏi
       const qtextEl = box.querySelector(
         '.yh-question-stem, .qtext, .question-text, .stem, .content-question, ' +
-        '.title-question, .question-title, [class*="question-content"], [class*="stem"]'
+        '.title-question, .question-title, [class*="question-content"], [class*="stem"], ' +
+        'p.font-semibold, p[class*="font-semibold"], p[class*="text-slate-900"], p[class*="text-"]'
       );
       let title = '';
       if (qtextEl) {
@@ -1031,21 +1032,37 @@
           });
         });
       } else {
-        // Nếu không có input radio, tìm các hàng đáp án (div, li, label, .r0, .r1, .form-check, .option)
+        // Nếu không có input radio, tìm các hàng đáp án (div, li, label, .r0, .r1, .form-check, .option, label[class*="cursor-pointer"])
         const optionRows = Array.from(box.querySelectorAll(
           '.yh-mcq-options > div, .ant-radio-wrapper, .answer > div, .answer > li, ' +
-          '.ablock .r0, .ablock .r1, .form-check, [class*="option-item"], [class*="choice"]'
+          '.ablock .r0, .ablock .r1, .form-check, [class*="option-item"], [class*="choice"], ' +
+          'label.cursor-pointer, label[class*="cursor-pointer"], label[class*="rounded-xl"], ' +
+          'div[class*="space-y"] > label, div[class*="space-y"] > div, label'
         )).filter(isVisible);
 
         optionRows.forEach((row, optIdx) => {
-          let optText = extractRichText(row);
+          let optText = '';
           let key = String.fromCharCode(65 + optIdx);
-          const match = optText.match(OPTION_PREFIX_REGEX);
-          if (match) {
-            key = match[1].toUpperCase();
-            optText = stripOptionPrefix(match[2], key);
-          } else {
+
+          // Kiểm tra xem row có badge chữ cái riêng (vd: <div class="...">A</div>)
+          const badgeEl = row.querySelector('div, span, b, strong, [class*="font-bold"]');
+          const badgeText = badgeEl ? cleanText(badgeEl.innerText || badgeEl.textContent || '').toUpperCase() : '';
+          const isSingleKeyBadge = /^[A-D]$/.test(badgeText);
+
+          const spanTextEl = row.querySelector('span:not(:empty), [class*="break-words"], [class*="text-"]') || row;
+          if (isSingleKeyBadge) {
+            key = badgeText;
+            optText = extractRichText(spanTextEl !== badgeEl ? spanTextEl : row);
             optText = stripOptionPrefix(optText, key);
+          } else {
+            optText = extractRichText(row);
+            const match = optText.match(OPTION_PREFIX_REGEX);
+            if (match) {
+              key = match[1].toUpperCase();
+              optText = stripOptionPrefix(match[2], key);
+            } else {
+              optText = stripOptionPrefix(optText, key);
+            }
           }
 
           row.setAttribute('data-qa-for', qId);
@@ -1057,11 +1074,19 @@
             inp.setAttribute('data-qa-opt', key);
           }
 
+          const isSelected = !!inp?.checked ||
+            row.classList.contains('border-sky-500') ||
+            row.classList.contains('ring-sky-500') ||
+            row.classList.contains('bg-sky-50') ||
+            /border-sky|ring-sky|bg-sky-50|selected|active|checked/i.test(row.className) ||
+            !!row.querySelector('[class*="bg-sky-600"], [class*="bg-blue-600"], [class*="border-sky-500"]');
+
           optionsMap.set(key, {
             key: key,
             text: optText,
             raw: `${key}. ${optText}`,
-            isChecked: inp ? (inp.checked || false) : false
+            isChecked: isSelected,
+            element: row
           });
         });
       }
@@ -1847,6 +1872,15 @@
       const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked'))
         .find(inp => !inp.closest('.qtype_multichoice_clearchoice'));
       if (checked) return true;
+
+      // Hỗ trợ giao diện không dùng <input> (React / Tailwind / Custom State)
+      const selectedCustomOption = card.querySelector(
+        'label.border-sky-500, label.ring-sky-500, label.bg-sky-50, label[class*="border-sky-500"], label[class*="ring-sky-500"], [class*="bg-sky-600"].text-white'
+      );
+      if (selectedCustomOption) return true;
+
+      const answeredBadge = card.querySelector('.bg-emerald-50, [class*="text-emerald-700"], [class*="border-emerald-200"]');
+      if (answeredBadge && /đã chọn|answered/i.test(answeredBadge.innerText || '')) return true;
     }
 
     if (Array.isArray(q.options) && q.options.length > 0) {
@@ -4372,34 +4406,80 @@ ${JSON.stringify(payload, null, 2)}
     const inputs = Array.from(card.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
       .filter(inp => !inp.closest('.qtype_multichoice_clearchoice'));
 
-    // B1: Khớp theo nội dung chữ của đáp án
-    if (optionText) {
-      const cleanTextLower = normalizeForMatch(optionText);
-      for (const inp of inputs) {
-        const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
-        const rowTxt = normalizeForMatch(row?.innerText || '');
-        if (rowTxt.includes(cleanTextLower)) {
-          return forceClickTarget(inp, row);
-        }
-      }
-    }
-
-    // B2: Khớp theo nhãn A, B, C, D
-    if (answerKey) {
-      for (const inp of inputs) {
-        const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
-        const rowTxt = cleanText(row?.innerText || '');
-        const matchKey = rowTxt.match(/(?:^|\s)([A-Da-d])[\.\)\:]/);
-        if (matchKey && matchKey[1].toUpperCase() === answerKey) {
-          return forceClickTarget(inp, row);
+    if (inputs.length > 0) {
+      // B1: Khớp theo nội dung chữ của đáp án
+      if (optionText) {
+        const cleanTextLower = normalizeForMatch(optionText);
+        for (const inp of inputs) {
+          const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
+          const rowTxt = normalizeForMatch(row?.innerText || '');
+          if (rowTxt.includes(cleanTextLower)) {
+            return forceClickTarget(inp, row);
+          }
         }
       }
 
-      // B3: Khớp theo vị trí A=0, B=1, C=2, D=3
-      const kIdx = answerKey.charCodeAt(0) - 65;
-      if (inputs[kIdx]) {
-        const row = inputs[kIdx].closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inputs[kIdx].parentElement;
-        return forceClickTarget(inputs[kIdx], row);
+      // B2: Khớp theo nhãn A, B, C, D
+      if (answerKey) {
+        for (const inp of inputs) {
+          const row = inp.closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inp.parentElement;
+          const rowTxt = cleanText(row?.innerText || '');
+          const matchKey = rowTxt.match(/(?:^|\s)([A-Da-d])[\.\)\:]/);
+          if (matchKey && matchKey[1].toUpperCase() === answerKey) {
+            return forceClickTarget(inp, row);
+          }
+        }
+
+        // B3: Khớp theo vị trí A=0, B=1, C=2, D=3
+        const kIdx = answerKey.charCodeAt(0) - 65;
+        if (inputs[kIdx]) {
+          const row = inputs[kIdx].closest('.r0, .r1, .form-check, .radio, .radio-inline, label, li, tr, div') || inputs[kIdx].parentElement;
+          return forceClickTarget(inputs[kIdx], row);
+        }
+      }
+    } else {
+      // C. FALLBACK CHO GIAO DIỆN HIỆN ĐẠI (React / Next.js / Tailwind không dùng <input>)
+      const optionRows = Array.from(card.querySelectorAll(
+        'label, [class*="cursor-pointer"], [data-qa-opt], div[class*="space-y"] > label, div[class*="space-y"] > div, .option-item'
+      )).filter(isVisible);
+
+      // C1: Khớp theo attribute [data-qa-opt]
+      if (answerKey) {
+        const byAttr = optionRows.find(r => r.getAttribute('data-qa-opt') === answerKey);
+        if (byAttr) return forceClickTarget(null, byAttr);
+      }
+
+      // C2: Khớp theo nội dung chữ của đáp án
+      if (optionText && optionRows.length > 0) {
+        const cleanTextLower = normalizeForMatch(optionText);
+        for (const row of optionRows) {
+          const rowTxt = normalizeForMatch(row?.innerText || '');
+          if (rowTxt.includes(cleanTextLower) || cleanTextLower.includes(rowTxt)) {
+            return forceClickTarget(null, row);
+          }
+        }
+      }
+
+      // C3: Khớp theo nhãn chữ A, B, C, D trong thẻ badge hoặc text
+      if (answerKey && optionRows.length > 0) {
+        for (const row of optionRows) {
+          const badgeEl = row.querySelector('div, span, b, strong, [class*="font-bold"]');
+          const badgeText = badgeEl ? cleanText(badgeEl.innerText || badgeEl.textContent || '').toUpperCase() : '';
+          if (badgeText === answerKey) {
+            return forceClickTarget(null, row);
+          }
+          const rowTxt = cleanText(row?.innerText || '');
+          const matchKey = rowTxt.match(/(?:^|\s)([A-Da-d])[\.\)\:\s]/);
+          if (matchKey && matchKey[1].toUpperCase() === answerKey) {
+            return forceClickTarget(null, row);
+          }
+        }
+
+        // C4: Khớp theo thứ tự A=0, B=1, C=2, D=3
+        const kIdx = answerKey.charCodeAt(0) - 65;
+        if (optionRows[kIdx]) {
+          return forceClickTarget(null, optionRows[kIdx]);
+        }
       }
     }
 
