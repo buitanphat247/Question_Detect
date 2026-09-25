@@ -3901,28 +3901,48 @@ ${JSON.stringify(payload, null, 2)}
 
   function findNextPageButton() {
     const candidates = Array.from(document.querySelectorAll([
+      'button',
       'input[type="submit"]',
       'button[type="submit"]',
-      'button',
       'input[type="button"]',
       'a.mod_quiz-next-nav',
-      '.mod_quiz-next-nav'
+      '.mod_quiz-next-nav',
+      'a.page-link'
     ].join(', '))).filter(isVisible);
 
     for (const btn of candidates) {
+      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
       const text = cleanText(btn.value || btn.innerText || btn.textContent || '').toLowerCase();
       const name = (btn.getAttribute('name') || '').toLowerCase();
       const href = btn.getAttribute('href') || '';
+      
       const isFinish = /làm xong|finish|submit|nộp bài|kết thúc/.test(text) || /finish|submit/.test(name);
       if (isFinish) continue;
+
+      // Tránh bấm nhầm nút "← Trước" hoặc "Quay lại"
+      if (/^←\s*trước|quay lại|previous|prev/i.test(text)) continue;
 
       const isNext =
         name === 'next' ||
         btn.classList.contains('mod_quiz-next-nav') ||
-        /trang tiếp|next page|next|tiếp theo/.test(text) ||
+        /trang tiếp|next page|next|tiếp theo|câu tiếp|tiếp tục|kế tiếp|tiếp theo\s*→/i.test(text) ||
         /[?&]page=\d+/.test(href);
 
       if (isNext) return btn;
+    }
+
+    // Fallback: Trong Bảng câu hỏi (Grid 1..40), tìm nút câu tiếp theo
+    const gridButtons = Array.from(document.querySelectorAll('.grid button, .qn_buttons button, .qnbutton, #mod_quiz_navblock button, #mod_quiz_navblock a')).filter(isVisible);
+    if (gridButtons.length > 1) {
+      // Tìm nút đang active (có viền ring-amber-500, ring-sky-500, active...)
+      const activeIdx = gridButtons.findIndex(b => 
+        b.className.includes('ring-') || 
+        b.className.includes('active') ||
+        b.getAttribute('aria-current') === 'page'
+      );
+      if (activeIdx !== -1 && activeIdx + 1 < gridButtons.length) {
+        return gridButtons[activeIdx + 1];
+      }
     }
 
     return null;
@@ -3933,18 +3953,41 @@ ${JSON.stringify(payload, null, 2)}
     if (!nextBtn) {
       setAutoAdvanceEnabled(false);
       console.log('[AutoSolver AutoNext] Không thấy nút Trang tiếp, dừng auto qua trang.');
+      showStealthToast('🏁 Đã giải xong toàn bộ bài thi!', 'success', 3000);
       return false;
     }
 
     console.log('[AutoSolver AutoNext] Đã chọn xong, tự chuyển Trang tiếp...');
-    setTimeout(() => {
-      try {
-        nextBtn.click();
-      } catch (e) {
-        const form = nextBtn.closest('form') || document.querySelector('form#responseform, form[action*="attempt.php"], form.mform');
-        if (form) form.submit();
+    setAutoAdvanceEnabled(true);
+
+    // Ghi lại nội dung thẻ câu hỏi hiện tại để biết khi nào React render xong câu mới
+    const currentCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
+    const oldQuestionText = currentCard ? (currentCard.innerText || currentCard.textContent || '') : '';
+    const oldUrl = window.location.href;
+
+    // Thực hiện click mạnh vào nút Tiếp theo
+    forceClickTarget(nextBtn, nextBtn);
+
+    // Hỗ trợ SPA/React: Polling kiểm tra khi nào câu hỏi mới xuất hiện
+    let pollCount = 0;
+    const maxPoll = 25; // 25 * 200ms = 5s
+    const pollInterval = setInterval(() => {
+      pollCount++;
+      const newCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
+      const newQuestionText = newCard ? (newCard.innerText || newCard.textContent || '') : '';
+      const isContentChanged = newCard && newQuestionText !== oldQuestionText;
+      const isUrlChanged = window.location.href !== oldUrl;
+
+      if (isContentChanged || isUrlChanged || pollCount >= maxPoll) {
+        clearInterval(pollInterval);
+        setTimeout(() => {
+          if (!isSolvingProcess && isAutoAdvanceEnabled()) {
+            triggerContinuousAutoSolve();
+          }
+        }, 400);
       }
-    }, 350);
+    }, 200);
+
     return true;
   }
 
