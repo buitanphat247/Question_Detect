@@ -1920,36 +1920,64 @@
 
   // ==========================================
   // HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
+  // Công thức chuẩn: T = Math.max(minBase, 2.8s + W * 50ms + J)
+  // Trong đó: W = số chữ, msPerWord = 50ms, J in [-800ms, +800ms]
   // ==========================================
-  function calculateHumanReadingDelay(question) {
+  function calculateHumanReadingDelay(questionOrText, customJitter = null) {
     const settings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings() : {
       enabled: typeof CFG.ENABLE_HUMAN_DELAY !== 'undefined' ? CFG.ENABLE_HUMAN_DELAY !== false : true,
       msPerWord: CFG.HUMAN_DELAY_MS_PER_WORD || 50,
       minMs: CFG.HUMAN_DELAY_MIN_MS || 2800,
-      maxMs: CFG.HUMAN_DELAY_MAX_MS || 15000
+      maxMs: CFG.HUMAN_DELAY_MAX_MS || 25000
     };
 
-    if (!settings.enabled || !question) {
-      return { totalDelay: 0, wordCount: 0 };
+    if (!settings.enabled || !questionOrText) {
+      return {
+        wordCount: 0,
+        baseDelay: settings.minMs || 2800,
+        jitter: 0,
+        finalDelay: 0,
+        totalDelay: 0
+      };
     }
 
-    let totalText = (question.passage || '') + ' ' + (question.title || '');
-    if (question.type === 'true_false_group' && Array.isArray(question.items)) {
-      totalText += ' ' + question.items.map(it => it.statement || '').join(' ');
-    } else if (Array.isArray(question.options)) {
-      totalText += ' ' + question.options.map(opt => opt.text || '').join(' ');
+    let wordCount = 0;
+    if (typeof questionOrText === 'number') {
+      wordCount = Math.max(0, Math.floor(questionOrText));
+    } else if (typeof questionOrText === 'string') {
+      wordCount = questionOrText.trim().split(/\s+/).filter(Boolean).length;
+    } else if (typeof questionOrText === 'object') {
+      let totalText = (questionOrText.passage || '') + ' ' + (questionOrText.title || '');
+      if (questionOrText.type === 'true_false_group' && Array.isArray(questionOrText.items)) {
+        totalText += ' ' + questionOrText.items.map(it => it.statement || '').join(' ');
+      } else if (Array.isArray(questionOrText.options)) {
+        totalText += ' ' + questionOrText.options.map(opt => opt.text || '').join(' ');
+      }
+      wordCount = totalText.trim().split(/\s+/).filter(Boolean).length;
     }
 
-    const words = totalText.trim().split(/\s+/).filter(Boolean);
-    const wordCount = words.length;
+    const minBase = settings.minMs || 2800;
+    const msPerWord = settings.msPerWord || 50;
+    const baseDelay = minBase + (wordCount * msPerWord);
+    
+    // Jitter ngẫu nhiên trong khoảng [-800ms, +800ms]
+    const jitter = (typeof customJitter === 'number') ? customJitter : (Math.floor(Math.random() * 1601) - 800);
+    
+    // T = max(minBase, baseDelay + jitter)
+    let finalDelay = Math.max(minBase, baseDelay + jitter);
+    if (settings.maxMs) {
+      finalDelay = Math.min(settings.maxMs, finalDelay);
+    }
 
-    // Tốc độ đọc & phân tích như người thật trong phòng thi:
-    // Base minMs (mặc định 2.8s) + (số chữ * 50ms) + Jitter ngẫu nhiên (+- 800ms)
-    const jitter = Math.floor(Math.random() * 1600) - 800;
-    let totalDelay = settings.minMs + (wordCount * settings.msPerWord) + jitter;
-    totalDelay = Math.max(settings.minMs, Math.min(settings.maxMs, totalDelay));
+    const result = {
+      wordCount,
+      baseDelay,
+      jitter,
+      finalDelay,
+      totalDelay: finalDelay // alias tương thích
+    };
 
-    return { totalDelay, wordCount };
+    return result;
   }
   const BACKUP_MODELS = [
     'gemini-2.5-flash',      // Backup 1 (Nhất) - Siêu nhanh 1.3s, native multimodal vision, cực kỳ chuẩn xác
@@ -4180,12 +4208,12 @@ ${JSON.stringify(payload, null, 2)}
           const cachedMap = await checkSupabaseCacheBatch([questionHash]);
           const cachedItem = cachedMap[questionHash];
           if (cachedItem && cachedItem.answer) {
-            console.log(`⚡ [Supabase Cache] Câu ${qNumLabel} ĐÃ CÓ trong Database.`);
-            const { totalDelay, wordCount } = calculateHumanReadingDelay(targetQ);
+            const delayInfo = calculateHumanReadingDelay(targetQ);
+            console.log(`[Human Delay] Câu ${qNumLabel} (DB Cache) - wordCount: ${delayInfo.wordCount}, baseDelay: ${delayInfo.baseDelay}ms, jitter: ${delayInfo.jitter}ms, finalDelay: ${delayInfo.finalDelay}ms`);
             const elapsed = Date.now() - solveStartTime;
-            if (totalDelay > elapsed) {
-              const waitMs = totalDelay - elapsed;
-              showStealthToast(`📖 [DB Cache] Đọc câu (${wordCount} chữ, ~${(waitMs / 1000).toFixed(1)}s)...`, 'info', waitMs);
+            if (delayInfo.finalDelay > elapsed) {
+              const waitMs = delayInfo.finalDelay - elapsed;
+              showStealthToast(`📖 [DB Cache] Đọc câu (${delayInfo.wordCount} chữ) [~${(waitMs / 1000).toFixed(1)}s]...`, 'info', waitMs);
               await sleepAsync(waitMs);
               if (!isSolveSessionActive(currentSolveSessionId)) return;
             }
@@ -4225,11 +4253,12 @@ ${JSON.stringify(payload, null, 2)}
       }
 
       // Đảm bảo đủ độ trễ đọc tự nhiên theo số chữ trước khi tích chọn
-      const { totalDelay, wordCount } = calculateHumanReadingDelay(targetQ);
+      const delayInfo = calculateHumanReadingDelay(targetQ);
+      console.log(`[Human Delay] Câu ${qNumLabel} (AI Solve) - wordCount: ${delayInfo.wordCount}, baseDelay: ${delayInfo.baseDelay}ms, jitter: ${delayInfo.jitter}ms, finalDelay: ${delayInfo.finalDelay}ms`);
       const elapsed = Date.now() - solveStartTime;
-      if (totalDelay > elapsed) {
-        const waitMs = totalDelay - elapsed;
-        showStealthToast(`📖 Đang đọc & đối chiếu (${wordCount} chữ, ~${(waitMs / 1000).toFixed(1)}s)...`, 'info', waitMs);
+      if (delayInfo.finalDelay > elapsed) {
+        const waitMs = delayInfo.finalDelay - elapsed;
+        showStealthToast(`📖 Đang đọc & đối chiếu (${delayInfo.wordCount} chữ) [~${(waitMs / 1000).toFixed(1)}s]...`, 'info', waitMs);
         await sleepAsync(waitMs);
         if (!isSolveSessionActive(currentSolveSessionId)) return;
       }
@@ -5106,7 +5135,8 @@ ${JSON.stringify(payload, null, 2)}
       getActiveReasoningEffort,
       isCacheActive,
       checkSupabaseCacheBatch,
-      saveToSupabaseCache
+      saveToSupabaseCache,
+      calculateHumanReadingDelay
     };
   }
 

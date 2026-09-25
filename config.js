@@ -8,7 +8,7 @@ if (typeof console !== 'undefined') {
 
 // =========================================================================
 // CONFIGURATION SYSTEM (ĐỒNG BỘ TỰ ĐỘNG TỪ .ENV)
-// Tự động sinh bởi sync_env.js vào lúc: 15:12:57 25/9/2026
+// Tự động sinh bởi sync_env.js vào lúc: 15:37:07 25/9/2026
 // =========================================================================
 
 var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG : {

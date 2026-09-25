@@ -40,8 +40,14 @@ async function runTests() {
   };
 
   // Nạp content.js vào JSDOM context
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origError = console.error;
   const contentJsCode = fs.readFileSync('content.js', 'utf8');
   window.eval(contentJsCode);
+  console.log = origLog;
+  console.warn = origWarn;
+  console.error = origError;
 
   console.log('Content script đã nạp thành công vào JSDOM.');
 
@@ -108,6 +114,57 @@ async function runTests() {
     console.log('✅ TEST PASSED: Click chuột hoạt động bình thường 100%, không bị chặn và không tạo overlay chắn trang.');
   } else {
     console.error(`❌ TEST FAILED: clicked=${clicked}, overlayExists=${overlayExists}`);
+  }
+
+  console.log('\n=== TEST 6: Kiểm tra Công thức Human-like Reading Debounce ===');
+  const contentModule = require('./content.js');
+  console.log = origLog;
+  console.warn = origWarn;
+  console.error = origError;
+  const { calculateHumanReadingDelay } = contentModule;
+
+  const testCases = [
+    { words: 15, expectedBase: 3550, minFinal: 2750, maxFinal: 4350 },
+    { words: 80, expectedBase: 6800, minFinal: 6000, maxFinal: 7600 },
+    { words: 150, expectedBase: 10300, minFinal: 9500, maxFinal: 11100 },
+    { words: 300, expectedBase: 17800, minFinal: 17000, maxFinal: 18600 }
+  ];
+
+  let test6Passed = true;
+  for (const tc of testCases) {
+    // 1. Kiểm tra với jitter ngẫu nhiên
+    const res = calculateHumanReadingDelay(tc.words);
+    console.log(`[Test WordCount=${tc.words}] -> wordCount: ${res.wordCount}, baseDelay: ${res.baseDelay}ms, jitter: ${res.jitter}ms, finalDelay: ${res.finalDelay}ms`);
+
+    if (res.baseDelay !== tc.expectedBase) {
+      console.error(`❌ Lỗi baseDelay cho ${tc.words} từ: Nhận ${res.baseDelay}, kỳ vọng ${tc.expectedBase}`);
+      test6Passed = false;
+    }
+
+    if (res.finalDelay < tc.minFinal || res.finalDelay > tc.maxFinal) {
+      console.error(`❌ Lỗi khoảng finalDelay cho ${tc.words} từ: Nhận ${res.finalDelay}, ngoài khoảng [${tc.minFinal}, ${tc.maxFinal}]`);
+      test6Passed = false;
+    }
+
+    // 2. Kiểm tra biên Jitter = -800ms
+    const resMinJitter = calculateHumanReadingDelay(tc.words, -800);
+    const expectedMin = Math.max(2800, tc.expectedBase - 800);
+    if (resMinJitter.finalDelay !== expectedMin) {
+      console.error(`❌ Lỗi jitter -800ms cho ${tc.words} từ: Nhận ${resMinJitter.finalDelay}, kỳ vọng ${expectedMin}`);
+      test6Passed = false;
+    }
+
+    // 3. Kiểm tra biên Jitter = +800ms
+    const resMaxJitter = calculateHumanReadingDelay(tc.words, 800);
+    const expectedMax = tc.expectedBase + 800;
+    if (resMaxJitter.finalDelay !== expectedMax) {
+      console.error(`❌ Lỗi jitter +800ms cho ${tc.words} từ: Nhận ${resMaxJitter.finalDelay}, kỳ vọng ${expectedMax}`);
+      test6Passed = false;
+    }
+  }
+
+  if (test6Passed) {
+    console.log('✅ TEST PASSED: Công thức T = max(2.8s, 2.8s + W * 50ms + J) và log trace (wordCount, baseDelay, jitter, finalDelay) chuẩn xác 100%!');
   }
 
   console.log('\n=============================================');
