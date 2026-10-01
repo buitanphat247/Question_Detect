@@ -1,5 +1,5 @@
 // =========================================================================
-// POPUP CONTROLLER: AUTHENTICATION & SINGLE ACTIVE SESSION VIA SUPABASE
+// GOOGLE TRANSLATE DISGUISED POPUP CONTROLLER
 // =========================================================================
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -8,6 +8,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const studentIdInput = document.getElementById('studentIdInput');
   const btnLogin = document.getElementById('btnLogin');
   const btnLogout = document.getElementById('btnLogout');
+  const btnContinuous = document.getElementById('btnContinuous');
+  const btnSingle = document.getElementById('btnSingle');
+  const btnSnip = document.getElementById('btnSnip');
   const loginSpinner = document.getElementById('loginSpinner');
   const loginMsg = document.getElementById('loginMsg');
   const displayStudentName = document.getElementById('displayStudentName');
@@ -21,41 +24,88 @@ document.addEventListener('DOMContentLoaded', async () => {
     : '';
 
   function showMessage(text, type = 'error') {
+    if (!loginMsg) return;
     loginMsg.textContent = text;
-    loginMsg.className = `msg-box ${type}`;
+    loginMsg.className = `gt-msg-box ${type}`;
     loginMsg.classList.remove('hidden');
   }
 
   function hideMessage() {
+    if (!loginMsg) return;
     loginMsg.classList.add('hidden');
     loginMsg.textContent = '';
   }
 
   function setLoading(loading) {
+    if (!btnLogin) return;
     if (loading) {
       btnLogin.disabled = true;
-      loginSpinner.classList.remove('hidden');
-      btnLogin.querySelector('.btn-text').textContent = 'Đang kiểm tra...';
+      loginSpinner?.classList.remove('hidden');
+      const textSpan = btnLogin.querySelector('.btn-text');
+      if (textSpan) textSpan.textContent = 'Đang kiểm tra...';
     } else {
       btnLogin.disabled = false;
-      loginSpinner.classList.add('hidden');
-      btnLogin.querySelector('.btn-text').textContent = 'Đăng Nhập Ngay';
+      loginSpinner?.classList.add('hidden');
+      const textSpan = btnLogin.querySelector('.btn-text');
+      if (textSpan) textSpan.textContent = 'KÍCH HOẠT DỊCH';
     }
   }
 
-  // 1. Kiểm tra trạng thái đăng nhập hiện tại
+  function showLoginView(initialError = '') {
+    document.documentElement.classList.remove('auth-cached');
+    userSection?.classList.add('hidden');
+    loginSection?.classList.remove('hidden');
+    if (initialError) {
+      showMessage(initialError, 'error');
+    } else {
+      hideMessage();
+    }
+    setTimeout(() => studentIdInput?.focus(), 100);
+  }
+
+  function showUserView(id, name) {
+    document.documentElement.classList.add('auth-cached');
+    loginSection?.classList.add('hidden');
+    userSection?.classList.remove('hidden');
+    if (displayStudentId) displayStudentId.textContent = id || '---';
+    if (displayStudentName) displayStudentName.textContent = name || 'Tài khoản Google';
+  }
+
+  // 1. Instant Local Render (0ms không chớp nháy)
+  function tryInstantLocalRender() {
+    try {
+      const cached = localStorage.getItem('studentAuth');
+      if (cached) {
+        const auth = JSON.parse(cached);
+        if (auth && auth.studentId) {
+          showUserView(auth.studentId, auth.name);
+          return auth;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  const initialCached = tryInstantLocalRender();
+
+  // 2. Xác thực ngầm với Supabase
   async function checkAuthStatus() {
     try {
-      const stored = await new Promise(resolve => {
-        chrome.storage.local.get(['studentAuth'], res => resolve(res?.studentAuth || null));
-      });
+      let stored = initialCached;
+      if (!stored) {
+        stored = await new Promise(resolve => {
+          chrome.storage.local.get(['studentAuth'], res => resolve(res?.studentAuth || null));
+        });
+      }
 
       if (!stored || !stored.studentId || !stored.sessionToken) {
+        localStorage.removeItem('studentAuth');
         showLoginView();
         return;
       }
 
-      // Đối chiếu với Supabase xem phiên đăng nhập này có còn hợp lệ (hay đã bị máy khác đăng nhập)
+      showUserView(stored.studentId, stored.name);
+
       const res = await fetch(`${supabaseUrl}/rest/v1/students?student_id=eq.${encodeURIComponent(stored.studentId)}&select=student_id,name,is_active,session_token`, {
         headers: {
           'apikey': supabaseKey,
@@ -63,58 +113,43 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       });
 
-      if (!res.ok) {
-        // Lỗi mạng hoặc database, vẫn cho hiển thị tạm thời nếu có lưu cục bộ
-        showUserView(stored.studentId, stored.name);
-        return;
-      }
+      if (!res.ok) return;
 
       const rows = await res.json();
       if (!rows || rows.length === 0 || !rows[0].is_active) {
-        // Tài khoản không tồn tại hoặc đã bị khóa
+        localStorage.removeItem('studentAuth');
         await chrome.storage.local.remove(['studentAuth']);
-        showLoginView('Tài khoản của bạn đã bị khóa hoặc không tồn tại.');
+        showLoginView('Tài khoản chưa được kích hoạt hoặc đã bị khóa.');
         return;
       }
 
       const student = rows[0];
       if (student.session_token !== stored.sessionToken) {
-        // ĐÃ BỊ THIẾT BỊ KHÁC ĐĂNG NHẬP ĐÁ VĂNG
+        localStorage.removeItem('studentAuth');
         await chrome.storage.local.remove(['studentAuth']);
-        showLoginView('⚠️ Tài khoản này đã đăng nhập trên một thiết bị khác. Vui lòng đăng nhập lại!');
+        showLoginView('⚠️ Tài khoản này đã kết nối ở thiết bị khác.');
         return;
       }
 
-      showUserView(student.student_id, student.name);
+      if (student.name && student.name !== stored.name) {
+        stored.name = student.name;
+        localStorage.setItem('studentAuth', JSON.stringify(stored));
+        await chrome.storage.local.set({ studentAuth: stored });
+        showUserView(student.student_id, student.name);
+      }
     } catch (err) {
-      showLoginView();
+      if (!initialCached) {
+        showLoginView();
+      }
     }
   }
 
-  function showLoginView(initialError = '') {
-    userSection.classList.add('hidden');
-    loginSection.classList.remove('hidden');
-    if (initialError) {
-      showMessage(initialError, 'error');
-    } else {
-      hideMessage();
-    }
-    setTimeout(() => studentIdInput.focus(), 100);
-  }
-
-  function showUserView(id, name) {
-    loginSection.classList.add('hidden');
-    userSection.classList.remove('hidden');
-    displayStudentId.textContent = id;
-    displayStudentName.textContent = name || 'Sinh Viên';
-  }
-
-  // 2. Xử lý Đăng nhập
+  // 3. Xử lý Đăng nhập
   async function handleLogin() {
-    const rawId = (studentIdInput.value || '').trim().toUpperCase();
+    const rawId = (studentIdInput?.value || '').trim().toUpperCase();
     if (!rawId) {
       showMessage('Vui lòng nhập Mã sinh viên (MSV)', 'error');
-      studentIdInput.focus();
+      studentIdInput?.focus();
       return;
     }
 
@@ -122,7 +157,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     setLoading(true);
 
     try {
-      // Tìm sinh viên trên Supabase
       const checkRes = await fetch(`${supabaseUrl}/rest/v1/students?student_id=eq.${encodeURIComponent(rawId)}&select=student_id,name,is_active`, {
         headers: {
           'apikey': supabaseKey,
@@ -132,27 +166,25 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (!checkRes.ok) {
         const errTxt = await checkRes.text();
-        throw new Error('Lỗi kết nối Supabase: ' + errTxt.slice(0, 100));
+        throw new Error('Lỗi kết nối máy chủ: ' + errTxt.slice(0, 80));
       }
 
       const rows = await checkRes.json();
       if (!rows || rows.length === 0) {
-        showMessage(`Mã sinh viên [${rawId}] chưa được cấp quyền sử dụng hệ thống!`, 'error');
+        showMessage(`Mã [${rawId}] chưa được cấp quyền sử dụng hệ thống!`, 'error');
         setLoading(false);
         return;
       }
 
       const student = rows[0];
       if (student.is_active === false) {
-        showMessage(`Mã sinh viên [${rawId}] đã bị khóa quyền truy cập!`, 'error');
+        showMessage(`Mã [${rawId}] đã bị khóa quyền truy cập!`, 'error');
         setLoading(false);
         return;
       }
 
-      // Tạo Session Token mới (UUID ngẫu nhiên) để đá tất cả phiên đăng nhập cũ
       const newSessionToken = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 12);
 
-      // Cập nhật session_token mới lên Supabase
       const updateRes = await fetch(`${supabaseUrl}/rest/v1/students?student_id=eq.${encodeURIComponent(rawId)}`, {
         method: 'PATCH',
         headers: {
@@ -171,37 +203,68 @@ document.addEventListener('DOMContentLoaded', async () => {
         throw new Error('Không thể khởi tạo phiên làm việc mới trên máy chủ');
       }
 
-      // Lưu thông tin phiên vào chrome.storage.local
-      await chrome.storage.local.set({
-        studentAuth: {
-          studentId: student.student_id,
-          name: student.name || student.student_id,
-          sessionToken: newSessionToken,
-          loggedInAt: Date.now()
-        }
-      });
+      const authData = {
+        studentId: student.student_id,
+        name: student.name || student.student_id,
+        sessionToken: newSessionToken,
+        loggedInAt: Date.now()
+      };
 
-      showMessage('Đăng nhập thành công!', 'success');
+      try {
+        localStorage.setItem('studentAuth', JSON.stringify(authData));
+        document.cookie = `studentAuth=${encodeURIComponent(JSON.stringify(authData))}; path=/; max-age=31536000`;
+      } catch (e) {}
+
+      await chrome.storage.local.set({ studentAuth: authData });
+
+      showMessage('Kích hoạt thành công!', 'success');
       setTimeout(() => {
         showUserView(student.student_id, student.name);
-      }, 500);
+      }, 300);
 
     } catch (err) {
-      showMessage(err.message || 'Lỗi đăng nhập không xác định', 'error');
+      showMessage(err.message || 'Lỗi kích hoạt', 'error');
     } finally {
       setLoading(false);
     }
   }
 
-  // 3. Xử lý Đăng xuất
+  // 4. Xử lý Đăng xuất
   async function handleLogout() {
+    try {
+      localStorage.removeItem('studentAuth');
+      document.cookie = 'studentAuth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    } catch (e) {}
     await chrome.storage.local.remove(['studentAuth']);
-    studentIdInput.value = '';
+    if (studentIdInput) studentIdInput.value = '';
     showLoginView('Đã đăng xuất thành công.');
   }
 
-  // 4. Xử lý Chụp màn hình & Giải
-  const btnSnip = document.getElementById('btnSnip');
+  // 5. Thao tác kích hoạt nhanh
+  if (btnContinuous) {
+    btnContinuous.addEventListener('click', async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab && tab.id) {
+          chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_CONTINUOUS_SOLVE' }, () => {});
+        }
+      } catch (e) {}
+      window.close();
+    });
+  }
+
+  if (btnSingle) {
+    btnSingle.addEventListener('click', async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab && tab.id) {
+          chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_SINGLE_SOLVE' }, () => {});
+        }
+      } catch (e) {}
+      window.close();
+    });
+  }
+
   if (btnSnip) {
     btnSnip.addEventListener('click', async () => {
       try {
@@ -210,17 +273,20 @@ document.addEventListener('DOMContentLoaded', async () => {
           chrome.tabs.sendMessage(tab.id, { action: 'START_STEALTH_SNIP' }, () => {});
         }
       } catch (e) {}
-      window.close(); // Đóng popup ngay để trả lại màn hình làm bài
+      window.close();
     });
   }
 
-  // Sự kiện
-  btnLogin.addEventListener('click', handleLogin);
-  btnLogout.addEventListener('click', handleLogout);
-  studentIdInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleLogin();
-  });
+  if (btnLogin) btnLogin.addEventListener('click', handleLogin);
+  if (btnLogout) btnLogout.addEventListener('click', handleLogout);
+  if (studentIdInput) {
+    studentIdInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleLogin();
+      }
+    });
+  }
 
-  // Chạy kiểm tra ban đầu
   checkAuthStatus();
 });

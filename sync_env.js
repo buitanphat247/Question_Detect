@@ -41,11 +41,6 @@ function sync() {
   const detectModel = envVars.DETECT_MODEL || 'gemini-3.5-flash';
   const apiKey = envVars.KEY4U_API_KEY || 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
 
-  const enableHumanDelay = envVars.ENABLE_HUMAN_DELAY ? envVars.ENABLE_HUMAN_DELAY.toLowerCase() === 'true' : true;
-  const humanDelayMsPerWord = parseInt(envVars.HUMAN_DELAY_MS_PER_WORD || '50', 10);
-  const humanDelayMinMs = parseInt(envVars.HUMAN_DELAY_MIN_MS || '2800', 10);
-  const humanDelayMaxMs = parseInt(envVars.HUMAN_DELAY_MAX_MS || '15000', 10);
-
   const newConfigContent = `// SILENT STEALTH MODE: Vô hiệu hóa toàn bộ console để DevTools luôn sạch sẽ 100%
 if (typeof console !== 'undefined') {
   console.log = () => {};
@@ -59,92 +54,65 @@ if (typeof console !== 'undefined') {
 // Tự động sinh bởi sync_env.js vào lúc: ${new Date().toLocaleString('vi-VN')}
 // =========================================================================
 
-var APP_CONFIG = (typeof APP_CONFIG !== 'undefined' && APP_CONFIG) ? APP_CONFIG : {
-  // 1. REASONING / SUY LUẬN SÂU
-  ENABLE_REASONING: ${enableReasoning},            // true = BẬT suy luận sâu, false = TẮT
-  REASONING_EFFORT: '${reasoningEffort}',          // 'high' | 'medium' | 'low'
+(function () {
+  var config = {
+    // 1. REASONING / SUY LUẬN SÂU
+    ENABLE_REASONING: ${enableReasoning},            // true = BẬT suy luận sâu, false = TẮT
+    REASONING_EFFORT: '${reasoningEffort}',          // 'high' | 'medium' | 'low'
 
-  // 2. SUPABASE CACHE / NGÂN HÀNG CÂU HỎI
-  ENABLE_SUPABASE_CACHE: ${enableSupabase},       // true = BẬT cache Supabase, false = TẮT
-  SUPABASE_URL: '${supabaseUrl}',
-  SUPABASE_ANON_KEY: '${supabaseAnonKey}',
+    // 2. SUPABASE CACHE / NGÂN HÀNG CÂU HỎI
+    ENABLE_SUPABASE_CACHE: ${enableSupabase},       // true = BẬT cache Supabase, false = TẮT
+    SUPABASE_URL: '${supabaseUrl}',
+    SUPABASE_ANON_KEY: '${supabaseAnonKey}',
 
-  // 3. AI MODELS & API KEY
-  DEFAULT_MODEL: '${defaultModel}',
-  CONSENSUS_MODEL: '${consensusModel}',
-  DETECT_MODEL: '${detectModel}',
-  KEY4U_API_KEY: '${apiKey}',
-
-  // 4. HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
-  ENABLE_HUMAN_DELAY: ${enableHumanDelay},          // true = BẬT độ trễ đọc tự nhiên theo số chữ, false = TẮT
-  HUMAN_DELAY_MS_PER_WORD: ${humanDelayMsPerWord},       // ~50ms mỗi từ (Mô phỏng đọc & suy ngẫm thực tế)
-  HUMAN_DELAY_MIN_MS: ${humanDelayMinMs},          // Độ trễ tối thiểu (2.8s cho câu ngắn)
-  HUMAN_DELAY_MAX_MS: ${humanDelayMaxMs}           // Độ trễ tối đa (15.0s cho bài đọc dài)
-};
-
-var isReasoningEnabled = (typeof isReasoningEnabled === 'function') ? isReasoningEnabled : function () {
-  return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_REASONING !== false;
-};
-
-var getReasoningEffort = (typeof getReasoningEffort === 'function') ? getReasoningEffort : function () {
-  return (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.REASONING_EFFORT) || 'high';
-};
-
-var isSupabaseCacheEnabled = (typeof isSupabaseCacheEnabled === 'function') ? isSupabaseCacheEnabled : function () {
-  return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_SUPABASE_CACHE === true;
-};
-
-var isHumanDelayEnabled = (typeof isHumanDelayEnabled === 'function') ? isHumanDelayEnabled : function () {
-  return typeof APP_CONFIG !== 'undefined' && APP_CONFIG.ENABLE_HUMAN_DELAY !== false;
-};
-
-var getHumanDelaySettings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings : function () {
-  return {
-    enabled: typeof APP_CONFIG !== 'undefined' ? APP_CONFIG.ENABLE_HUMAN_DELAY !== false : true,
-    msPerWord: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MS_PER_WORD) || 50,
-    minMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MIN_MS) || 2800,
-    maxMs: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.HUMAN_DELAY_MAX_MS) || 15000
+    // 3. AI MODELS & API KEY
+    DEFAULT_MODEL: '${defaultModel}',
+    CONSENSUS_MODEL: '${consensusModel}',
+    DETECT_MODEL: '${detectModel}',
+    KEY4U_API_KEY: '${apiKey}'
   };
-};
 
-if (typeof globalThis !== 'undefined') {
-  globalThis.APP_CONFIG = APP_CONFIG;
-  globalThis.isReasoningEnabled = isReasoningEnabled;
-  globalThis.getReasoningEffort = getReasoningEffort;
-  globalThis.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
-  globalThis.isHumanDelayEnabled = isHumanDelayEnabled;
-  globalThis.getHumanDelaySettings = getHumanDelaySettings;
-}
-
-if (typeof window !== 'undefined') {
-  window.APP_CONFIG = APP_CONFIG;
-  window.isReasoningEnabled = isReasoningEnabled;
-  window.getReasoningEffort = getReasoningEffort;
-  window.isSupabaseCacheEnabled = isSupabaseCacheEnabled;
-  window.isHumanDelayEnabled = isHumanDelayEnabled;
-  window.getHumanDelaySettings = getHumanDelaySettings;
-}
-
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    APP_CONFIG,
-    isReasoningEnabled,
-    getReasoningEffort,
-    isSupabaseCacheEnabled,
-    isHumanDelayEnabled,
-    getHumanDelaySettings
+  var reasoningHelper = function () {
+    return (typeof globalThis.APP_CONFIG !== 'undefined' && globalThis.APP_CONFIG.ENABLE_REASONING !== false);
   };
-}
+
+  var effortHelper = function () {
+    return (typeof globalThis.APP_CONFIG !== 'undefined' && globalThis.APP_CONFIG.REASONING_EFFORT) || 'high';
+  };
+
+  var cacheHelper = function () {
+    return (typeof globalThis.APP_CONFIG !== 'undefined' && globalThis.APP_CONFIG.ENABLE_SUPABASE_CACHE === true);
+  };
+
+  if (typeof globalThis !== 'undefined') {
+    globalThis.APP_CONFIG = config;
+    globalThis.isReasoningEnabled = reasoningHelper;
+    globalThis.getReasoningEffort = effortHelper;
+    globalThis.isSupabaseCacheEnabled = cacheHelper;
+  }
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      APP_CONFIG: config,
+      isReasoningEnabled: reasoningHelper,
+      getReasoningEffort: effortHelper,
+      isSupabaseCacheEnabled: cacheHelper
+    };
+  }
+})();
+
+var APP_CONFIG = (typeof globalThis !== 'undefined') ? globalThis.APP_CONFIG : undefined;
+var isReasoningEnabled = (typeof globalThis !== 'undefined') ? globalThis.isReasoningEnabled : undefined;
+var getReasoningEffort = (typeof globalThis !== 'undefined') ? globalThis.getReasoningEffort : undefined;
+var isSupabaseCacheEnabled = (typeof globalThis !== 'undefined') ? globalThis.isSupabaseCacheEnabled : undefined;
 `;
 
   fs.writeFileSync(configPath, newConfigContent, 'utf8');
   console.log('✅ Đã đồng bộ cấu hình từ .env sang config.js:');
   console.log(`   - ENABLE_REASONING: ${enableReasoning} (effort: ${reasoningEffort})`);
   console.log(`   - ENABLE_SUPABASE_CACHE: ${enableSupabase}`);
-  console.log(`   - ENABLE_HUMAN_DELAY: ${enableHumanDelay} (${humanDelayMsPerWord}ms/word, min: ${humanDelayMinMs}ms, max: ${humanDelayMaxMs}ms)`);
   console.log(`   - DEFAULT_MODEL: ${defaultModel}`);
   console.log(`   - CONSENSUS_MODEL: ${consensusModel}`);
 }
 
 sync();
-

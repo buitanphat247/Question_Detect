@@ -31,6 +31,8 @@
   const ENABLE_MOODLE_AJAX_NAVIGATION = false;
   const AUTO_ADVANCE_SESSION_KEY = 'qa_auto_advance_enabled';
 
+
+
   const IGNORE_TAGS = new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'NAV', 'HEADER', 'FOOTER',
     'IFRAME', 'BUTTON', 'SELECT', 'TEXTAREA', 'AUDIO', 'VIDEO', 'ASIDE'
@@ -80,6 +82,56 @@
 
     // 2. Nếu root có thẻ câu hỏi trực tiếp hoặc không tìm thấy container ưu tiên, dùng body hoặc root
     return root.body || (root.documentElement || root);
+  }
+
+  function waitForDomReady() {
+    return new Promise((resolve) => {
+      if (typeof document === 'undefined') return resolve();
+      if (document.readyState === 'interactive' || document.readyState === 'complete') {
+        return resolve();
+      }
+      const onReady = () => {
+        document.removeEventListener('DOMContentLoaded', onReady);
+        window.removeEventListener('load', onReady);
+        resolve();
+      };
+      document.addEventListener('DOMContentLoaded', onReady, { once: true });
+      window.addEventListener('load', onReady, { once: true });
+      setTimeout(resolve, 2500);
+    });
+  }
+
+  function waitForExamContainer(timeoutMs = 3000) {
+    return new Promise(async (resolve) => {
+      await waitForDomReady();
+      if (typeof document === 'undefined') return resolve(null);
+      const root = getMainScanRoot(document);
+      if (root && root.querySelector('.que, .yh-question-card, [class*="question"], [id^="q-"], [id^="question-"], input[type="radio"], input[type="checkbox"]')) {
+        return resolve(root);
+      }
+      if (typeof MutationObserver === 'undefined') return resolve(root);
+
+      let timer = null;
+      const observer = new MutationObserver(() => {
+        const target = getMainScanRoot(document);
+        if (target && target.querySelector('.que, .yh-question-card, [class*="question"], [id^="q-"], [id^="question-"], input[type="radio"], input[type="checkbox"]')) {
+          if (timer) clearTimeout(timer);
+          observer.disconnect();
+          resolve(target);
+        }
+      });
+
+      try {
+        observer.observe(document.documentElement || document, { childList: true, subtree: true });
+      } catch (e) {
+        return resolve(root);
+      }
+
+      timer = setTimeout(() => {
+        try { observer.disconnect(); } catch (e) {}
+        resolve(getMainScanRoot(document));
+      }, timeoutMs);
+    });
   }
 
   function isNavigationOrSystemSpamElement(elem) {
@@ -1604,39 +1656,68 @@
 
   /**
    * Click tự nhiên, kín đáo (KHÔNG hiệu ứng lộ, KHÔNG bôi đen text)
+   * Đa tầng chống miss: Scroll into view, hỗ trợ label[for], Idempotent checked state, full event dispatching
    */
   function forceClickTarget(targetInput, wrapperEl) {
     const input = findRadioInput(targetInput) || findRadioInput(wrapperEl);
-    const label = findLabel(targetInput) || findLabel(wrapperEl);
+    let label = findLabel(targetInput) || findLabel(wrapperEl);
+
+    // Hỗ trợ tìm label[for="id"] nếu input có id
+    if (!label && input && input.id && typeof document !== 'undefined') {
+      try {
+        const escapedId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(input.id) : input.id.replace(/(:|\.|\[|\]|,|=|@)/g, "\\$1");
+        label = document.querySelector(`label[for="${escapedId}"]`);
+      } catch (e) {}
+    }
 
     if (!input && !label && !wrapperEl) return false;
 
-    // Kích hoạt click cả input và label để ăn 100% trên mọi nền tảng (Moodle, Azota, Canvas, YourHomework...)
-    if (input && typeof input.click === 'function') {
+    // 1. Kiểm tra tính Idempotent: Nếu là radio và đã checked đúng rồi thì chỉ cần đảm bảo state mà không re-click
+    if (input && input.type === 'radio' && input.checked) {
       try {
-        input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        input.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        input.click();
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) {}
+      return true;
+    }
+
+    // 3. Kích hoạt chuỗi sự kiện người dùng tự nhiên
+    const activeView = (typeof window !== 'undefined') ? window : null;
+    const createMouseEvent = (type) => {
+      const isDown = (type === 'mousedown' || type === 'pointerdown');
+      try {
+        return new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: activeView || window,
+          detail: 1,
+          button: 0,
+          buttons: isDown ? 1 : 0
+        });
+      } catch (e) {
+        return new Event(type, { bubbles: true, cancelable: true });
+      }
+    };
+
+    const targetToClick = input || label || wrapperEl;
+    if (targetToClick) {
+      try {
+        targetToClick.dispatchEvent(createMouseEvent('pointerdown'));
+        targetToClick.dispatchEvent(createMouseEvent('mousedown'));
+        targetToClick.dispatchEvent(createMouseEvent('pointerup'));
+        targetToClick.dispatchEvent(createMouseEvent('mouseup'));
+        if (typeof targetToClick.click === 'function') {
+          targetToClick.click();
+        }
       } catch (e) {}
     }
 
-    if (label && label !== input && typeof label.click === 'function') {
+    if (label && label !== targetToClick && typeof label.click === 'function') {
       try {
-        label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        label.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        label.click();
+        label.dispatchEvent(createMouseEvent('click'));
       } catch (e) {}
     }
 
-    if (wrapperEl && wrapperEl !== input && wrapperEl !== label && typeof wrapperEl.click === 'function') {
-      try {
-        wrapperEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        wrapperEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        wrapperEl.click();
-      } catch (e) {}
-    }
-
-    // Đảm bảo INPUT được set checked và bắn event chuẩn
+    // 4. Đảm bảo INPUT được set checked và bắn change/input event cho Moodle / React / Vue
     if (input && input.tagName === 'INPUT') {
       try {
         if (!input.checked) {
@@ -1647,7 +1728,7 @@
       } catch (e) {}
     }
 
-    // Ant Design Radio Wrapper support
+    // 5. Ant Design Radio Wrapper support
     const antRadio = (wrapperEl || input)?.closest('.ant-radio-wrapper');
     if (antRadio && typeof antRadio.click === 'function') {
       try {
@@ -1655,9 +1736,9 @@
       } catch (e) {}
     }
 
-    // Xóa sạch mọi bôi đen/selection
+    // 6. Xóa sạch mọi bôi đen/selection
     try {
-      if (window.getSelection) {
+      if (typeof window !== 'undefined' && window.getSelection) {
         window.getSelection().removeAllRanges();
       }
     } catch (e) {}
@@ -1804,9 +1885,6 @@
     clearHighlights();
     const el = document.querySelector(`[data-qa-id="${qaId}"]`);
     if (el) {
-      try {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } catch (e) {}
       return true;
     }
     return false;
@@ -1898,6 +1976,8 @@
   const DEFAULT_API_KEY = CFG.KEY4U_API_KEY || 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
   const DEFAULT_MODEL = CFG.DEFAULT_MODEL || 'claude-opus-4-8';
   const CONSENSUS_MODEL = CFG.CONSENSUS_MODEL || 'gemini-3.5-flash';
+  const SUPABASE_URL = CFG.SUPABASE_URL || 'https://aacpvpfkqhwlltwjjiag.supabase.co';
+  const SUPABASE_ANON_KEY = CFG.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhY3B2cGZrcWh3bGx0d2pqaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwMzU4MTMsImV4cCI6MjEwNDYxMTgxM30.RUNkB2a4_Ji2rAHbqbBOMmmDDo_j8hDl7dmXKj1IooM';
 
   function isReasoningActive() {
     if (typeof isReasoningEnabled === 'function') return isReasoningEnabled();
@@ -1912,73 +1992,9 @@
   function isCacheActive() {
     if (typeof isSupabaseCacheEnabled === 'function') return isSupabaseCacheEnabled();
     return CFG.ENABLE_SUPABASE_CACHE === true;
-  }
-
-  function sleepAsync(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // ==========================================
-  // HUMAN-LIKE READING DEBOUNCE / CHỐNG CHỌN QUÁ NHANH
-  // Công thức chuẩn: T = Math.max(minBase, 2.8s + W * 50ms + J)
-  // Trong đó: W = số chữ, msPerWord = 50ms, J in [-800ms, +800ms]
-  // ==========================================
-  function calculateHumanReadingDelay(questionOrText, customJitter = null) {
-    const settings = (typeof getHumanDelaySettings === 'function') ? getHumanDelaySettings() : {
-      enabled: typeof CFG.ENABLE_HUMAN_DELAY !== 'undefined' ? CFG.ENABLE_HUMAN_DELAY !== false : true,
-      msPerWord: CFG.HUMAN_DELAY_MS_PER_WORD || 50,
-      minMs: CFG.HUMAN_DELAY_MIN_MS || 2800,
-      maxMs: CFG.HUMAN_DELAY_MAX_MS || 25000
-    };
-
-    if (!settings.enabled || !questionOrText) {
-      return {
-        wordCount: 0,
-        baseDelay: settings.minMs || 2800,
-        jitter: 0,
-        finalDelay: 0,
-        totalDelay: 0
-      };
-    }
-
-    let wordCount = 0;
-    if (typeof questionOrText === 'number') {
-      wordCount = Math.max(0, Math.floor(questionOrText));
-    } else if (typeof questionOrText === 'string') {
-      wordCount = questionOrText.trim().split(/\s+/).filter(Boolean).length;
-    } else if (typeof questionOrText === 'object') {
-      let totalText = (questionOrText.passage || '') + ' ' + (questionOrText.title || '');
-      if (questionOrText.type === 'true_false_group' && Array.isArray(questionOrText.items)) {
-        totalText += ' ' + questionOrText.items.map(it => it.statement || '').join(' ');
-      } else if (Array.isArray(questionOrText.options)) {
-        totalText += ' ' + questionOrText.options.map(opt => opt.text || '').join(' ');
-      }
-      wordCount = totalText.trim().split(/\s+/).filter(Boolean).length;
-    }
-
-    const minBase = settings.minMs || 2800;
-    const msPerWord = settings.msPerWord || 50;
-    const baseDelay = minBase + (wordCount * msPerWord);
-    
-    // Jitter ngẫu nhiên trong khoảng [-800ms, +800ms]
-    const jitter = (typeof customJitter === 'number') ? customJitter : (Math.floor(Math.random() * 1601) - 800);
-    
-    // T = max(minBase, baseDelay + jitter)
-    let finalDelay = Math.max(minBase, baseDelay + jitter);
-    if (settings.maxMs) {
-      finalDelay = Math.min(settings.maxMs, finalDelay);
-    }
-
-    const result = {
-      wordCount,
-      baseDelay,
-      jitter,
-      finalDelay,
-      totalDelay: finalDelay // alias tương thích
-    };
-
-    return result;
-  }
+  } // Model phụ đối chiếu chính thức: Gemini 3.5 Flash GA
+  
+  // DANH SÁCH MODEL BACKUP ĐA TẦNG (NHẤT, NHÌ, BA) - 100% NGOÀI GPT, PHẢN HỒI ~1S
   const BACKUP_MODELS = [
     'gemini-2.5-flash',      // Backup 1 (Nhất) - Siêu nhanh 1.3s, native multimodal vision, cực kỳ chuẩn xác
     'gemini-3.7-flash',      // Backup 2 (Nhì)  - Thế hệ Gemini 3.7 cân bằng trí tuệ và tốc độ 1.8s
@@ -3965,58 +3981,198 @@ ${JSON.stringify(payload, null, 2)}
     }
   }
 
+  function isPreviousButton(btn) {
+    if (!btn) return false;
+    const text = cleanText(btn.value || btn.innerText || btn.textContent || '').toLowerCase();
+    const name = (btn.getAttribute('name') || '').toLowerCase();
+    const id = (btn.getAttribute('id') || '').toLowerCase();
+    const cls = (btn.className || '').toString().toLowerCase();
+    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+    const title = (btn.getAttribute('title') || '').toLowerCase();
+    const rel = (btn.getAttribute('rel') || '').toLowerCase();
+    const dataAction = (btn.getAttribute('data-action') || '').toLowerCase();
+    const dataNav = (btn.getAttribute('data-nav') || '').toLowerCase();
+
+    // 1. Kiểm tra rel, name, id, data-action
+    if (rel === 'prev' || rel === 'previous') return true;
+    if (name === 'previous' || name === 'prev' || name === 'back' || name === 'btnprev' || name === 'btn-prev') return true;
+    if (id === 'previous' || id === 'prev' || id === 'back' || id === 'btnprev' || id === 'btn-prev') return true;
+    if (dataAction === 'prev' || dataAction === 'previous' || dataAction === 'back') return true;
+    if (dataNav === 'prev' || dataNav === 'previous' || dataNav === 'back') return true;
+
+    // 2. Kiểm tra class
+    if (btn.classList.contains('mod_quiz-prev-nav') ||
+        btn.classList.contains('prev') ||
+        btn.classList.contains('previous') ||
+        btn.classList.contains('btn-prev') ||
+        btn.classList.contains('page-prev') ||
+        btn.classList.contains('nav-prev') ||
+        cls.includes('mod_quiz-prev-nav') ||
+        cls.includes('btn-prev') ||
+        cls.includes('page-prev') ||
+        cls.includes('button-prev')) {
+      return true;
+    }
+
+    // 3. Kiểm tra aria-label hoặc title
+    const labelCombined = (aria + ' ' + title).trim();
+    if (/(?:trang\s*trước|câu\s*trước|bài\s*trước|bước\s*trước|quay\s*lại|quay\s*về|trở\s*về|trở\s*lại|lùi\s*lại|lùi|previous|prev|back)/i.test(labelCombined)) {
+      return true;
+    }
+
+    // 4. Kiểm tra text/value (bắt trọn mọi từ khóa lùi / trước)
+    if (/(?:^|\b|\s)(?:trang\s*trước|câu\s*trước|bài\s*trước|mục\s*trước|về\s*trước|bước\s*trước|quay\s*lại|quay\s*về|trở\s*về|trở\s*lại|lùi\s*lại|lùi|previous(?:\s*page|\s*question)?|prev|back)(?:\b|\s|$)/i.test(text)) {
+      return true;
+    }
+
+    // 5. Ký tự mũi tên lùi
+    if (/^[←«‹<]\s*(?:trước|prev|back)?$/i.test(text.trim())) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function isNextButton(btn) {
+    if (!btn) return false;
+    if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return false;
+    if (isPreviousButton(btn)) return false;
+
+    const text = cleanText(btn.value || btn.innerText || btn.textContent || '').toLowerCase();
+    const name = (btn.getAttribute('name') || '').toLowerCase();
+    const id = (btn.getAttribute('id') || '').toLowerCase();
+    const cls = (btn.className || '').toString().toLowerCase();
+    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+    const title = (btn.getAttribute('title') || '').toLowerCase();
+    const rel = (btn.getAttribute('rel') || '').toLowerCase();
+    const dataAction = (btn.getAttribute('data-action') || '').toLowerCase();
+    const dataNav = (btn.getAttribute('data-nav') || '').toLowerCase();
+
+    // Loại trừ nút nộp bài / kết thúc / làm xong
+    if (/(?:làm\s*xong|finish(?:\s*attempt)?|nộp\s*bài|submit(?:\s*all)?|kết\s*thúc|hoàn\s*thành)/i.test(text) ||
+        /(?:finish|submit)/i.test(name) || /(?:finish|submit)/i.test(id)) {
+      return false;
+    }
+
+    // 1. Moodle Next chuẩn
+    if (name === 'next' || id === 'next' || btn.classList.contains('mod_quiz-next-nav') || cls.includes('mod_quiz-next-nav')) {
+      return true;
+    }
+
+    // 2. Rel / Data action
+    if (rel === 'next' || dataAction === 'next' || dataNav === 'next') return true;
+
+    // 3. Class chứa next
+    if (btn.classList.contains('next') || btn.classList.contains('btn-next') || btn.classList.contains('page-next') || cls.includes('btn-next')) {
+      return true;
+    }
+
+    // 4. Text / Value rõ ràng là tiến tới
+    if (/(?:trang\s*tiếp(?:\s*theo)?|trang\s*sau|câu\s*tiếp(?:\s*theo)?|câu\s*kế\s*tiếp|kế\s*tiếp|tiếp\s*theo|tiếp\s*tục|bước\s*tiếp(?:\s*theo)?|next(?:\s*page|\s*question)?|continue|forward)\b/i.test(text)) {
+      return true;
+    }
+
+    // Mũi tên tiến tới
+    if (/(?:tiếp|next).*[→»›>]/i.test(text) || /^[→»›>]$/.test(text.trim())) {
+      return true;
+    }
+
+    // Aria / Title
+    const labelCombined = (aria + ' ' + title).trim();
+    if (/(?:trang\s*tiếp|câu\s*tiếp|tiếp\s*theo|kế\s*tiếp|tiếp\s*tục|next|continue)/i.test(labelCombined)) {
+      return true;
+    }
+
+    return false;
+  }
+
   function findNextPageButton() {
-    const candidates = Array.from(document.querySelectorAll([
-      'button',
+    // 1. ƯU TIÊN 1: Tìm nút TIẾP THEO rõ ràng bằng text / name / class / attribute (Tuyệt đối loại trừ nút Lùi / Trước)
+    const primaryCandidates = Array.from(document.querySelectorAll([
       'input[type="submit"]',
       'button[type="submit"]',
+      'button',
       'input[type="button"]',
       'a.mod_quiz-next-nav',
       '.mod_quiz-next-nav',
-      'a.page-link'
+      'a[rel="next"]',
+      'a.page-link',
+      'a'
     ].join(', '))).filter(isVisible);
 
-    for (const btn of candidates) {
-      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
-      const text = cleanText(btn.value || btn.innerText || btn.textContent || '').toLowerCase();
-      const name = (btn.getAttribute('name') || '').toLowerCase();
-      const href = btn.getAttribute('href') || '';
-      
-      const isFinish = /làm xong|finish|submit|nộp bài|kết thúc/.test(text) || /finish|submit/.test(name);
-      if (isFinish) continue;
-
-      // Tránh bấm nhầm nút "← Trước" hoặc "Quay lại"
-      if (/^←\s*trước|quay lại|previous|prev/i.test(text)) continue;
-
-      const isNext =
-        name === 'next' ||
-        btn.classList.contains('mod_quiz-next-nav') ||
-        /trang tiếp|next page|next|tiếp theo|câu tiếp|tiếp tục|kế tiếp|tiếp theo\s*→/i.test(text) ||
-        /[?&]page=\d+/.test(href);
-
-      if (isNext) return btn;
+    for (const btn of primaryCandidates) {
+      if (isNextButton(btn)) {
+        return btn;
+      }
     }
 
-    // Fallback: Trong Bảng câu hỏi (Grid 1..40), tìm nút câu tiếp theo
-    const gridButtons = Array.from(document.querySelectorAll('.grid button, .qn_buttons button, .qnbutton, #mod_quiz_navblock button, #mod_quiz_navblock a')).filter(isVisible);
+    // 2. ƯU TIÊN 2: Pagination chuẩn (Tìm trang kế tiếp trang đang active, tránh lấy trang 1 hoặc trang trước)
+    const activePageItems = Array.from(document.querySelectorAll('.pagination .active, .page-item.active, [aria-current="page"], [aria-current="true"]')).filter(isVisible);
+    for (const activeItem of activePageItems) {
+      let nextSibling = activeItem.nextElementSibling;
+      while (nextSibling) {
+        const linkOrBtn = nextSibling.matches('a, button') ? nextSibling : nextSibling.querySelector('a, button');
+        if (linkOrBtn && isVisible(linkOrBtn) && !isPreviousButton(linkOrBtn)) {
+          return linkOrBtn;
+        }
+        nextSibling = nextSibling.nextElementSibling;
+      }
+    }
+
+    // 3. ƯU TIÊN 3: Bảng câu hỏi số (Grid 1..N / qnbuttons), nhảy sang câu tiếp theo
+    const gridButtons = Array.from(document.querySelectorAll('.grid button, .qn_buttons button, .qnbutton, #mod_quiz_navblock button, #mod_quiz_navblock a, [class*="question-nav"] button, [class*="question-nav"] a')).filter(isVisible);
     if (gridButtons.length > 1) {
-      // Tìm nút đang active (có viền ring-amber-500, ring-sky-500, active...)
-      const activeIdx = gridButtons.findIndex(b => 
-        b.className.includes('ring-') || 
-        b.className.includes('active') ||
-        b.getAttribute('aria-current') === 'page'
-      );
-      if (activeIdx !== -1 && activeIdx + 1 < gridButtons.length) {
-        return gridButtons[activeIdx + 1];
+      const indexedButtons = [];
+      for (const b of gridButtons) {
+        const txt = (b.innerText || b.textContent || '').trim();
+        const numMatch = txt.match(/^\d+$/) || txt.match(/(?:câu|q)\s*(\d+)/i);
+        if (numMatch) {
+          indexedButtons.push({
+            btn: b,
+            num: parseInt(numMatch[1] || numMatch[0], 10),
+            isActive: b.className.includes('ring-') || b.className.includes('active') || b.className.includes('thispage') || b.getAttribute('aria-current') === 'page'
+          });
+        }
+      }
+
+      if (indexedButtons.length > 1) {
+        const activeIdx = indexedButtons.findIndex(item => item.isActive);
+        if (activeIdx !== -1 && activeIdx + 1 < indexedButtons.length) {
+          return indexedButtons[activeIdx + 1].btn;
+        }
       }
     }
 
     return null;
   }
 
-  let isTransitioningPage = false;
-  async function clickNextQuestionPage() {
-    if (isTransitioningPage) return false;
+  let isPageNavigating = false;
+
+  function handleMoodleErrorPageAutoRecover() {
+    if (typeof document === 'undefined') return false;
+    const bodyText = (document.body?.innerText || '').toLowerCase();
+    if (bodyText.includes('submissionoutofsequence') || bodyText.includes('chuỗi tuần tự') || bodyText.includes('out of sequence')) {
+      const continueBtn = Array.from(document.querySelectorAll('button, input[type="submit"], a')).find(el => {
+        const txt = cleanText(el.value || el.innerText || '').toLowerCase();
+        return txt === 'tiếp tục' || txt === 'continue' || txt.includes('tiếp tục');
+      });
+      if (continueBtn) {
+        showStealthToast('🔄 Đang tự động nhấn Tiếp tục để khôi phục bài thi...', 'info', 2000);
+        setTimeout(() => {
+          if (typeof continueBtn.click === 'function') continueBtn.click();
+        }, 500);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function clickNextQuestionPage() {
+    if (isPageNavigating) return false;
+
+    // Nếu đang ở trang lỗi Moodle, bấm "Tiếp tục" để quay lại bài thi
+    if (handleMoodleErrorPageAutoRecover()) return true;
+
     const nextBtn = findNextPageButton();
     if (!nextBtn) {
       setAutoAdvanceEnabled(false);
@@ -4025,50 +4181,54 @@ ${JSON.stringify(payload, null, 2)}
       return false;
     }
 
-    isTransitioningPage = true;
-    try {
-      // Debounce tự nhiên trước khi chuyển trang (2.8s -> 4.3s) để chống bị nghi ngờ dùng tool
-      const transitionDelay = Math.floor(2800 + Math.random() * 1500);
-      console.log(`[AutoSolver Transition] Đang chờ debounce tự nhiên (~${(transitionDelay / 1000).toFixed(1)}s) trước khi chuyển trang...`);
-      showStealthToast(`⏳ Đang chờ chuyển trang tự nhiên (~${(transitionDelay / 1000).toFixed(1)}s)...`, 'info', transitionDelay);
-      await sleepAsync(transitionDelay);
+    isPageNavigating = true;
+    console.log('[AutoSolver AutoNext] Đã chọn xong, tự chuyển Trang tiếp...');
+    setAutoAdvanceEnabled(true);
+    showStealthToast('🚀 Đang chuyển sang trang tiếp theo...', 'info', 1500);
 
-      console.log('[AutoSolver AutoNext] Đã chọn xong, chuyển Trang tiếp...');
+    // Ghi lại nội dung thẻ câu hỏi hiện tại để biết khi nào render xong câu mới
+    const currentCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
+    const oldQuestionText = currentCard ? (currentCard.innerText || currentCard.textContent || '') : '';
+    const oldUrl = window.location.href;
 
-      // Ghi lại nội dung thẻ câu hỏi hiện tại để biết khi nào React render xong câu mới
-      const currentCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
-      const oldQuestionText = currentCard ? (currentCard.innerText || currentCard.textContent || '') : '';
-      const oldUrl = window.location.href;
 
-      // Thực hiện click mạnh vào nút Tiếp theo
-      forceClickTarget(nextBtn, nextBtn);
 
-      // Hỗ trợ SPA/React: Polling kiểm tra khi nào câu hỏi mới xuất hiện
-      let pollCount = 0;
-      const maxPoll = 25; // 25 * 200ms = 5s
-      const pollInterval = setInterval(() => {
-        pollCount++;
-        const newCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
-        const newQuestionText = newCard ? (newCard.innerText || newCard.textContent || '') : '';
-        const isContentChanged = newCard && newQuestionText !== oldQuestionText;
-        const isUrlChanged = window.location.href !== oldUrl;
+    // CLICK DUY NHẤT 1 LẦN BẰNG NATIVE CLICK (Tránh tuyệt đối lỗi gửi 2 request trùng sequence của Moodle)
+    setTimeout(() => {
+      try {
+        nextBtn.click();
+      } catch (e) {
+        try {
+          const form = nextBtn.closest('form');
+          if (form && typeof form.requestSubmit === 'function') {
+            form.requestSubmit(nextBtn);
+          }
+        } catch (err) {}
+      }
+    }, 150);
 
-        if (isContentChanged || isUrlChanged || pollCount >= maxPoll) {
-          clearInterval(pollInterval);
-          isTransitioningPage = false;
-          setTimeout(() => {
-            if (!isSolvingProcess && isAutoAdvanceEnabled()) {
-              triggerContinuousAutoSolve();
-            }
-          }, 400);
-        }
-      }, 200);
+    // Hỗ trợ SPA/React: Polling kiểm tra khi nào câu hỏi mới xuất hiện
+    let pollCount = 0;
+    const maxPoll = 25; // 25 * 200ms = 5s
+    const pollInterval = setInterval(() => {
+      pollCount++;
+      const newCard = document.querySelector('.que, .yh-question-card, [id^="question-"], [class*="question-card"]');
+      const newQuestionText = newCard ? (newCard.innerText || newCard.textContent || '') : '';
+      const isContentChanged = newCard && newQuestionText !== oldQuestionText;
+      const isUrlChanged = window.location.href !== oldUrl;
 
-      return true;
-    } catch (err) {
-      isTransitioningPage = false;
-      return false;
-    }
+      if (isContentChanged || isUrlChanged || pollCount >= maxPoll) {
+        clearInterval(pollInterval);
+        isPageNavigating = false;
+        setTimeout(() => {
+          if (!isSolvingProcess && isAutoAdvanceEnabled()) {
+            triggerContinuousAutoSolve();
+          }
+        }, 400);
+      }
+    }, 200);
+
+    return true;
   }
 
   let isSolvingProcess = false;
@@ -4151,7 +4311,6 @@ ${JSON.stringify(payload, null, 2)}
     isSolvingProcess = true;
     setAutoAdvanceEnabled(false); // Đảm bảo tắt tự chuyển trang
     const currentSolveSessionId = ++solveSessionId;
-    const solveStartTime = Date.now();
 
     try {
       let apiKey = DEFAULT_API_KEY;
@@ -4169,6 +4328,7 @@ ${JSON.stringify(payload, null, 2)}
       }
 
       console.log(`[AutoSolver Alt+H] Đang quét câu hỏi trên trang...`);
+      await waitForExamContainer(2000);
       if (!isSolveSessionActive(currentSolveSessionId)) return;
       let questions = extractQuestionsAndAnswers();
       if (!questions || questions.length === 0) {
@@ -4207,13 +4367,8 @@ ${JSON.stringify(payload, null, 2)}
 
       const qNumLabel = targetQ.num || (questions.indexOf(targetQ) + 1);
       const targetCard = targetQ.card || (targetQ.id && typeof document !== 'undefined' ? document.querySelector(`[data-qa-id="${targetQ.id}"]`) : null);
-      if (targetCard) {
-        try {
-          targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        } catch (e) {}
-      }
 
-      // BƯỚC 1: Nếu bật Cache Supabase, kiểm tra ngân hàng câu hỏi trước
+      // BƯỚC 1: Nếu bật Cache Supabase, kiểm tra ngân hàng câu hỏi trước (0ms)
       let questionHash = null;
       if (isCacheActive()) {
         const opts = targetQ.type === 'true_false_group' ? (targetQ.items || []) : (targetQ.options || []);
@@ -4222,18 +4377,10 @@ ${JSON.stringify(payload, null, 2)}
           const cachedMap = await checkSupabaseCacheBatch([questionHash]);
           const cachedItem = cachedMap[questionHash];
           if (cachedItem && cachedItem.answer) {
-            const delayInfo = calculateHumanReadingDelay(targetQ);
-            console.log(`[Human Delay] Câu ${qNumLabel} (DB Cache) - wordCount: ${delayInfo.wordCount}, baseDelay: ${delayInfo.baseDelay}ms, jitter: ${delayInfo.jitter}ms, finalDelay: ${delayInfo.finalDelay}ms`);
-            const elapsed = Date.now() - solveStartTime;
-            if (delayInfo.finalDelay > elapsed) {
-              const waitMs = delayInfo.finalDelay - elapsed;
-              showStealthToast(`📖 [DB Cache] Đọc câu (${delayInfo.wordCount} chữ) [~${(waitMs / 1000).toFixed(1)}s]...`, 'info', waitMs);
-              await sleepAsync(waitMs);
-              if (!isSolveSessionActive(currentSolveSessionId)) return;
-            }
+            console.log(`⚡ [Supabase Cache] Câu ${qNumLabel} ĐÃ CÓ trong Database -> Tích chọn ngay lập tức!`);
             if (applySolvedAnswer(targetQ, cachedItem.answer)) {
               const ansLabel = targetQ.type === 'true_false_group' ? 'Đúng/Sai' : (cachedItem.answer.answer || 'OK');
-              showStealthToast(`⚡ [DB Cache] Câu ${qNumLabel}: ${ansLabel}`, 'success', 2500);
+              showStealthToast(`⚡ [DB Cache] Câu ${qNumLabel}: ${ansLabel} (0ms)`, 'success', 2500);
               highlightQuestion(targetQ.id);
               return;
             }
@@ -4264,17 +4411,6 @@ ${JSON.stringify(payload, null, 2)}
         console.warn(`[Alt+H] Câu ${qNumLabel}: Không đạt đồng thuận hoặc lỗi:`, resp?.reason);
         showStealthToast(`❌ Câu ${qNumLabel}: ${resp?.reason || 'Không đạt đồng thuận'}`, 'error', 3000);
         return;
-      }
-
-      // Đảm bảo đủ độ trễ đọc tự nhiên theo số chữ trước khi tích chọn
-      const delayInfo = calculateHumanReadingDelay(targetQ);
-      console.log(`[Human Delay] Câu ${qNumLabel} (AI Solve) - wordCount: ${delayInfo.wordCount}, baseDelay: ${delayInfo.baseDelay}ms, jitter: ${delayInfo.jitter}ms, finalDelay: ${delayInfo.finalDelay}ms`);
-      const elapsed = Date.now() - solveStartTime;
-      if (delayInfo.finalDelay > elapsed) {
-        const waitMs = delayInfo.finalDelay - elapsed;
-        showStealthToast(`📖 Đang đọc & đối chiếu (${delayInfo.wordCount} chữ) [~${(waitMs / 1000).toFixed(1)}s]...`, 'info', waitMs);
-        await sleepAsync(waitMs);
-        if (!isSolveSessionActive(currentSolveSessionId)) return;
       }
 
       const applied = applySolvedAnswer(targetQ, resp.data);
@@ -4316,9 +4452,9 @@ ${JSON.stringify(payload, null, 2)}
       return;
     }
     isSolvingProcess = true;
-    setAutoAdvanceEnabled(false); // Tuyệt đối KHÔNG tự động chuyển qua trang
+    setAutoAdvanceEnabled(true);
     const currentSolveSessionId = ++solveSessionId;
-    showStealthToast('🚀 [Alt+K] Tự động giải toàn bộ câu hỏi trên trang...', 'info', 2000);
+    showStealthToast('🚀 [Alt+K] Bật TỰ ĐỘNG LIÊN TIẾP (Auto-advance ON)', 'info', 2000);
 
     try {
       let apiKey = DEFAULT_API_KEY;
@@ -4336,6 +4472,7 @@ ${JSON.stringify(payload, null, 2)}
       }
 
       console.log(`[AutoSolver Alt+K] Đang quét DOM đề thi (siêu tốc 5ms)...`);
+      await waitForExamContainer(2000);
       if (!isSolveSessionActive(currentSolveSessionId)) return;
       let questions = extractQuestionsAndAnswers();
       if (!questions || questions.length === 0) {
@@ -4381,21 +4518,15 @@ ${JSON.stringify(payload, null, 2)}
       const needAiSolve = [];
 
       for (let i = 0; i < questions.length; i++) {
-        if (!isSolveSessionActive(currentSolveSessionId)) return;
         const q = questions[i];
         const hash = questionHashes[i] || null;
         const cachedItem = hash ? cachedMap[hash] : null;
 
         if (cachedItem && cachedItem.answer) {
           const qLabel = q.num || (i + 1);
-          const { totalDelay, wordCount } = calculateHumanReadingDelay(q);
-          showStealthToast(`📖 [DB Cache] Đọc câu ${qLabel} (${wordCount} chữ, ~${(totalDelay / 1000).toFixed(1)}s)...`, 'info', totalDelay);
-          await sleepAsync(totalDelay);
-          if (!isSolveSessionActive(currentSolveSessionId)) return;
+          console.log(`⚡ [Supabase Cache] Câu ${qLabel} ĐÃ CÓ trong Database -> Tích chọn ngay lập tức!`);
           if (applySolvedAnswer(q, cachedItem.answer)) {
             successCount++;
-            highlightQuestion(q.id);
-            console.log(`⚡ [Supabase Cache] Câu ${qLabel} ĐÃ CÓ trong Database -> Đã tích chọn sau ${totalDelay}ms.`);
           }
         } else {
           needAiSolve.push({
@@ -4408,7 +4539,8 @@ ${JSON.stringify(payload, null, 2)}
       }
 
       if (successCount > 0) {
-        console.log(`⚡ [Supabase Cache] Đã lấy xong ${successCount} câu từ Database!`);
+        console.log(`⚡ [Supabase Cache] Đã lấy ngay ${successCount}/${questions.length} câu từ Database!`);
+        showStealthToast(`⚡ Lấy ${successCount}/${questions.length} câu từ Database!`, 'info', 2000);
       }
 
       if (needAiSolve.length > 0) {
@@ -4457,13 +4589,11 @@ ${JSON.stringify(payload, null, 2)}
 
                 const answerData = mergeConsensusAnswer(item.q, firstResult, secondResult);
                 if (!isSolveSessionActive(currentSolveSessionId)) return;
-                const { totalDelay } = calculateHumanReadingDelay(item.q);
-                await sleepAsync(Math.min(2500, totalDelay));
-                if (!isSolveSessionActive(currentSolveSessionId)) return;
+                // Human jitter timing: 50ms-120ms
+                await new Promise(r => setTimeout(r, 50 + Math.random() * 70));
                 if (applySolvedAnswer(item.q, answerData)) {
                   solvedKeys.add(item.solveKey);
                   successCount++;
-                  highlightQuestion(item.q.id);
                   console.log(`[AutoSolver Batch] Consensus chọn câu ${item.q.num}: ${answerData.answer || 'Đúng/Sai'} (${successCount}/${questions.length})`);
                   if (isCacheActive() && item.hash) {
                     saveToSupabaseCache(item.hash, item.q.title, null, answerData);
@@ -4495,12 +4625,10 @@ ${JSON.stringify(payload, null, 2)}
               }
 
               if (!isSolveSessionActive(currentSolveSessionId)) return;
-              const { totalDelay } = calculateHumanReadingDelay(q);
-              await sleepAsync(Math.min(2500, totalDelay));
-              if (!isSolveSessionActive(currentSolveSessionId)) return;
+              // Human jitter timing: 50ms-120ms
+              await new Promise(r => setTimeout(r, 50 + Math.random() * 70));
               if (applySolvedAnswer(q, resp.data)) {
                 successCount++;
-                highlightQuestion(q.id);
                 console.log(`[AutoSolver Parallel] Consensus chọn câu ${qLabel}: ${resp.data.answer || 'Đúng/Sai'} (${successCount}/${questions.length})`);
                 if (isCacheActive() && item.hash) {
                   saveToSupabaseCache(item.hash, q.title, null, resp.data);
@@ -4515,8 +4643,16 @@ ${JSON.stringify(payload, null, 2)}
 
       if (!isSolveSessionActive(currentSolveSessionId)) return;
       console.log(`[AutoSolver Alt+K] Hoàn tất! Đã hoàn thành ${successCount}/${questions.length} câu.`);
-      setAutoAdvanceEnabled(false);
-      showStealthToast(`✅ Đã giải xong ${successCount}/${questions.length} câu trên trang!`, 'success', 3500);
+      if (isAutoAdvanceEnabled() && isSolveSessionActive(currentSolveSessionId)) {
+        const nextBtn = findNextPageButton();
+        if (nextBtn) {
+          showStealthToast(`✅ Đã giải xong trang (${successCount}/${questions.length} câu). Đang chuyển trang tiếp...`, 'success', 1500);
+          clickNextQuestionPage();
+        } else {
+          showStealthToast(`🏁 Đã hoàn thành toàn bộ bài thi! (${successCount} câu)`, 'success', 3000);
+          setAutoAdvanceEnabled(false);
+        }
+      }
     } catch (e) {
       console.warn('[AutoSolver Alt+K] Lỗi:', e);
       showStealthToast(`Lỗi: ${e.message || e}`, 'error', 3000);
@@ -4721,6 +4857,10 @@ ${JSON.stringify(payload, null, 2)}
       try { snipOverlay.remove(); } catch (e) {}
       snipOverlay = null;
     }
+    try {
+      const leftovers = document.querySelectorAll('#__qa_stealth_snip_overlay');
+      leftovers.forEach(el => el.remove());
+    } catch (e) {}
   }
 
   async function startStealthSnipping() {
@@ -4879,9 +5019,11 @@ ${JSON.stringify(payload, null, 2)}
   // - Alt + H: Từng câu một (không chuyển trang)
   // - Alt + K: Tự động liên tiếp (tự qua trang liên tục)
   // - Alt + Y: Chụp màn hình vùng chọn để giải
+  // PHÍM TẮT ĐIỀU KHIỂN:
+  // - Phím N (hoặc Alt+H): Giải 1 câu đơn lẻ (không chuyển trang)
+  // - Alt + K: Tự động giải liên tiếp (tự giải & tự chuyển trang)
+  // - Alt + Y: Chụp màn hình vùng chọn để giải (AI Vision)
   // - Escape: Dừng mọi tiến trình giải & tắt tự qua trang
-  // - Chuột giữa (Con lăn / Button 1): Tự động giải liên tiếp
-  // - Triple Click chuột trái: Chụp màn hình vùng chọn để giải
   if (typeof window !== 'undefined') {
     const handleKeyDownCapture = (e) => {
       const isEsc = e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
@@ -4895,14 +5037,18 @@ ${JSON.stringify(payload, null, 2)}
         return;
       }
 
-      // Phím N: Giải 1 câu hiện tại (khi không gõ vào ô nhập liệu text)
-      const activeTag = (document.activeElement?.tagName || '').toUpperCase();
-      const isEditableInput = document.activeElement?.isContentEditable || 
-        (activeTag === 'INPUT' && !['RADIO', 'CHECKBOX', 'BUTTON', 'SUBMIT'].includes(document.activeElement?.type?.toUpperCase() || '')) || 
-        activeTag === 'TEXTAREA';
+      // Kiểm tra nếu đang gõ văn bản trong ô text/textarea thì không kích hoạt phím N
+      const target = e.target;
+      const isTyping = target && (
+        (target.tagName === 'INPUT' && !['radio', 'checkbox', 'button', 'submit', 'image', 'reset'].includes((target.type || '').toLowerCase())) ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.getAttribute?.('contenteditable') === 'true'
+      );
 
-      const isKeyN = (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN') && !isEditableInput);
-      const isAltH = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H' || e.code === 'KeyH'));
+      // Phím N (hoặc Alt + H): Giải câu đơn lẻ
+      const isKeyN = (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN') && !isTyping);
+      const isAltH = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H' || e.code === 'KeyH' || e.key === 'n' || e.key === 'N' || e.code === 'KeyN'));
       if (isKeyN || isAltH) {
         e.preventDefault();
         e.stopPropagation();
@@ -4920,8 +5066,10 @@ ${JSON.stringify(payload, null, 2)}
         return;
       }
 
+      // Phím Y (hoặc Alt + Y): Chụp màn hình vùng chọn để giải (AI Vision)
+      const isKeyY = (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY') && !isTyping);
       const isAltY = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY'));
-      if (isAltY) {
+      if (isKeyY || isAltY) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation?.();
@@ -4930,24 +5078,7 @@ ${JSON.stringify(payload, null, 2)}
       }
     };
 
-    // Gắn capture listener phím tắt duy nhất lên window
-    try {
-      window.addEventListener('keydown', handleKeyDownCapture, { capture: true, passive: false });
-    } catch (err) {}
-
-    // Click con lăn chuột (Middle Mouse Click - button 1): Tự động giải liên tiếp
-    const handleMiddleClickCapture = (e) => {
-      if (e.button === 1) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation?.();
-        triggerContinuousAutoSolve();
-      }
-    };
-
-    try {
-      window.addEventListener('auxclick', handleMiddleClickCapture, { capture: true, passive: false });
-    } catch (err) {}
+    window.addEventListener('keydown', handleKeyDownCapture, { capture: true, passive: false });
 
     window.addEventListener('pagehide', () => {
       try {
@@ -5001,10 +5132,16 @@ ${JSON.stringify(payload, null, 2)}
     });
   }
 
+  if (typeof document !== 'undefined') {
+    handleMoodleErrorPageAutoRecover();
+  }
+
   if (isAutoAdvanceEnabled()) {
     setTimeout(() => {
       if (!isSolvingProcess) {
-        triggerContinuousAutoSolve();
+        if (!handleMoodleErrorPageAutoRecover()) {
+          triggerContinuousAutoSolve();
+        }
       }
     }, 900);
   }
@@ -5094,7 +5231,7 @@ ${JSON.stringify(payload, null, 2)}
         oldNav.innerHTML = newNav.innerHTML;
       }
 
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+
 
       if (isAutoAdvanceEnabled()) {
         setTimeout(() => {
@@ -5141,8 +5278,7 @@ ${JSON.stringify(payload, null, 2)}
       getActiveReasoningEffort,
       isCacheActive,
       checkSupabaseCacheBatch,
-      saveToSupabaseCache,
-      calculateHumanReadingDelay
+      saveToSupabaseCache
     };
   }
 

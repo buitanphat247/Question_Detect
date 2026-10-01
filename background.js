@@ -236,19 +236,7 @@ if (typeof chrome !== 'undefined') {
     });
   }
 
-  // Tự động gắn content script ngay khi tab hoặc popup cửa sổ mới được tạo ra
-  if (chrome.tabs?.onUpdated) {
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-      if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
-        if (tab?.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://') && !tab.url.startsWith('about:') && !tab.url.startsWith('chrome-extension://')) {
-          chrome.scripting?.executeScript({
-            target: { tabId: tabId, allFrames: true },
-            files: ['config.js', 'content.js']
-          }).catch(() => {});
-        }
-      }
-    });
-  }
+
 
   // 1. Khi click trực tiếp vào icon extension trên toolbar: Tự giải ngầm (mặc định từng câu)
   if (chrome.action?.onClicked) {
@@ -308,25 +296,25 @@ if (typeof chrome !== 'undefined') {
       chrome.contextMenus.removeAll(() => {
         chrome.contextMenus.create({
           id: 'qa-menu-root',
-          title: '⚡ AI Exam Solver',
+          title: '🌐 Language Translate',
           contexts: ['all']
         });
         chrome.contextMenus.create({
           parentId: 'qa-menu-root',
           id: 'qa-capture-solve',
-          title: '📸 Chụp màn hình vùng chọn & Giải',
+          title: '📸 Dịch vùng ảnh chọn (Phím Y)',
           contexts: ['all']
         });
         chrome.contextMenus.create({
           parentId: 'qa-menu-root',
           id: 'qa-solve-single',
-          title: '⚡ Giải 1 câu hỏi này (Alt + H)',
+          title: '⚡ Dịch đoạn văn bản này (Phím N)',
           contexts: ['all']
         });
         chrome.contextMenus.create({
           parentId: 'qa-menu-root',
           id: 'qa-solve-continuous',
-          title: '🚀 Tự động giải liên tiếp (Alt + K / Chuột giữa)',
+          title: '🚀 Tự động dịch toàn bộ trang (Alt + K)',
           contexts: ['all']
         });
       });
