@@ -36,6 +36,9 @@ function sync() {
   const enableSupabase = envVars.ENABLE_SUPABASE_CACHE ? envVars.ENABLE_SUPABASE_CACHE.toLowerCase() === 'true' : true;
   const supabaseUrl = envVars.SUPABASE_URL || 'https://aacpvpfkqhwlltwjjiag.supabase.co';
   const supabaseAnonKey = envVars.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhY3B2cGZrcWh3bGx0d2pqaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwMzU4MTMsImV4cCI6MjEwNDYxMTgxM30.RUNkB2a4_Ji2rAHbqbBOMmmDDo_j8hDl7dmXKj1IooM';
+  const enableScreenshotUpload = envVars.ENABLE_SCREENSHOT_UPLOAD ? envVars.ENABLE_SCREENSHOT_UPLOAD.toLowerCase() === 'true' : true;
+  const screenshotUploadBucket = envVars.SCREENSHOT_UPLOAD_BUCKET || 'screenshots';
+  const screenshotUploadMaxBytes = Number(envVars.SCREENSHOT_UPLOAD_MAX_BYTES) || 6000000;
   const defaultModel = envVars.DEFAULT_MODEL || 'claude-opus-4-8';
   const consensusModel = envVars.CONSENSUS_MODEL || 'gemini-3.5-flash';
   const detectModel = envVars.DETECT_MODEL || 'gemini-3.5-flash';
@@ -64,6 +67,10 @@ if (typeof console !== 'undefined') {
     ENABLE_SUPABASE_CACHE: ${enableSupabase},       // true = BẬT cache Supabase, false = TẮT
     SUPABASE_URL: '${supabaseUrl}',
     SUPABASE_ANON_KEY: '${supabaseAnonKey}',
+
+    ENABLE_SCREENSHOT_UPLOAD: ${enableScreenshotUpload},
+    SCREENSHOT_UPLOAD_BUCKET: '${screenshotUploadBucket}',
+    SCREENSHOT_UPLOAD_MAX_BYTES: ${screenshotUploadMaxBytes},
 
     // 3. AI MODELS & API KEY
     DEFAULT_MODEL: '${defaultModel}',
@@ -111,6 +118,7 @@ var isSupabaseCacheEnabled = (typeof globalThis !== 'undefined') ? globalThis.is
   console.log('✅ Đã đồng bộ cấu hình từ .env sang config.js:');
   console.log(`   - ENABLE_REASONING: ${enableReasoning} (effort: ${reasoningEffort})`);
   console.log(`   - ENABLE_SUPABASE_CACHE: ${enableSupabase}`);
+  console.log(`   - ENABLE_SCREENSHOT_UPLOAD: ${enableScreenshotUpload}`);
   console.log(`   - DEFAULT_MODEL: ${defaultModel}`);
   console.log(`   - CONSENSUS_MODEL: ${consensusModel}`);
 }

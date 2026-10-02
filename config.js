@@ -8,7 +8,7 @@ if (typeof console !== 'undefined') {
 
 // =========================================================================
 // CONFIGURATION SYSTEM (ĐỒNG BỘ TỰ ĐỘNG TỪ .ENV)
-// Tự động sinh bởi sync_env.js vào lúc: 22:58:24 28/9/2026
+// Tự động sinh bởi sync_env.js vào lúc: 08:49:44 2/10/2026
 // =========================================================================
 
 (function () {
@@ -21,6 +21,10 @@ if (typeof console !== 'undefined') {
     ENABLE_SUPABASE_CACHE: false,       // true = BẬT cache Supabase, false = TẮT
     SUPABASE_URL: 'https://aacpvpfkqhwlltwjjiag.supabase.co',
     SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhY3B2cGZrcWh3bGx0d2pqaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwMzU4MTMsImV4cCI6MjEwNDYxMTgxM30.RUNkB2a4_Ji2rAHbqbBOMmmDDo_j8hDl7dmXKj1IooM',
+
+    ENABLE_SCREENSHOT_UPLOAD: true,
+    SCREENSHOT_UPLOAD_BUCKET: 'screenshots',
+    SCREENSHOT_UPLOAD_MAX_BYTES: 6000000,
 
     // 3. AI MODELS & API KEY
     DEFAULT_MODEL: 'claude-opus-4-8',

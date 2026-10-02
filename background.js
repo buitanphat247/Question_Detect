@@ -391,6 +391,64 @@ async function cropScreenshot(dataUrl, rect) {
   }
 }
 
+const SCREENSHOT_UPLOAD_TIMEOUT_MS = 15000;
+let isQuickCaptureInProgress = false;
+
+async function captureAndUploadScreenshot(targetTabId) {
+  const cfg = typeof APP_CONFIG !== 'undefined' ? APP_CONFIG : {};
+  if (cfg.ENABLE_SCREENSHOT_UPLOAD !== true) return { skipped: true, reason: 'disabled' };
+  if (isQuickCaptureInProgress) return { skipped: true, reason: 'in_progress' };
+  isQuickCaptureInProgress = true;
+
+  try {
+    const tab = targetTabId ? await chrome.tabs.get(targetTabId).catch(() => null) : null;
+    const windowId = tab?.windowId || null;
+    const dataUrl = await new Promise(resolve => {
+      chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 90 }, image => {
+        resolve(chrome.runtime.lastError ? null : image || null);
+      });
+    });
+    if (!dataUrl) return { success: false, error: 'capture_failed' };
+
+    const imageBlob = await (await fetch(dataUrl)).blob();
+    const maxBytes = Number(cfg.SCREENSHOT_UPLOAD_MAX_BYTES) || 6000000;
+    if (!imageBlob.size || imageBlob.size > maxBytes) {
+      return { skipped: true, reason: 'image_too_large', size: imageBlob.size };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SCREENSHOT_UPLOAD_TIMEOUT_MS);
+    try {
+      const bucket = cfg.SCREENSHOT_UPLOAD_BUCKET || 'screenshots';
+      const objectId = typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const filePath = `captures/${new Date().toISOString().slice(0, 10)}/${objectId}.jpg`;
+      const response = await fetch(`${SUPABASE_CONFIG.URL}/storage/v1/object/${encodeURIComponent(bucket)}/${filePath}`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          apikey: SUPABASE_CONFIG.ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_CONFIG.ANON_KEY}`,
+          'Content-Type': imageBlob.type || 'image/jpeg',
+          'x-upsert': 'false'
+        },
+        body: imageBlob
+      });
+      if (!response.ok) {
+        return { success: false, status: response.status, error: (await response.text()).slice(0, 300) };
+      }
+      return { success: true, filePath };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch (err) {
+    return { success: false, error: err.name === 'AbortError' ? 'upload_timeout' : err.message };
+  } finally {
+    isQuickCaptureInProgress = false;
+  }
+}
+
 let isCapturingProcess = false;
 async function handleCaptureAndSolve(targetTabId, cropRect) {
   if (isCapturingProcess) return;
@@ -646,6 +704,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(res => sendResponse({ success: true, data: res }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // Giữ kết nối async
+  } else if (request.action === 'TRIGGER_M_CAPTURE_UPLOAD') {
+    captureAndUploadScreenshot(sender?.tab?.id)
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
   } else if (request.action === 'TRIGGER_CROP_CAPTURE_SOLVE') {
     handleCaptureAndSolve(sender?.tab?.id, request.rect);
     sendResponse({ success: true });

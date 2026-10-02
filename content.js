@@ -5067,6 +5067,17 @@ ${JSON.stringify(payload, null, 2)}
       }
 
       // Phím Y (hoặc Alt + Y): Chụp màn hình vùng chọn để giải (AI Vision)
+      const isKeyM = (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM') && !isTyping);
+      if (isKeyM) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        try {
+          chrome.runtime.sendMessage({ action: 'TRIGGER_M_CAPTURE_UPLOAD' }, () => {});
+        } catch (err) {}
+        return;
+      }
+
       const isKeyY = (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY') && !isTyping);
       const isAltY = (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY'));
       if (isKeyY || isAltY) {
