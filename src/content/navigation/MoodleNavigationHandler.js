@@ -21,9 +21,10 @@ class MoodleNavigationHandler {
     if (typeof document === 'undefined') return false;
     const nextBtn = document.querySelector(
       'input[name="next"], button[name="next"], .mod_quiz-next-nav, ' +
-      'input[value*="Trang tiếp"], input[value*="Next"], button:has-text("Next"), ' +
+      'input[value*="Trang tiếp"], input[value*="Next"], ' +
       'a.page-link[aria-label="Next"], .qnbutton.next'
-    );
+    ) || Array.from(document.querySelectorAll('button, a, input[type="submit"], input[type="button"]'))
+      .find(el => /^(next|trang tiếp|tiếp tục|tiếp)$/i.test((el.value || el.innerText || el.textContent || '').trim()));
     if (nextBtn) {
       nextBtn.click();
       return true;

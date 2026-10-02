@@ -1,8 +1,8 @@
 class StealthCaptureSolver {
   constructor({ apiClient, defaultModel, consensusModel, defaultApiKey, contentScriptFiles } = {}) {
     this.apiClient = apiClient || new Key4uApiClient();
-    this.defaultModel = defaultModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'claude-opus-4-8');
-    this.consensusModel = consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.5-flash');
+    this.defaultModel = defaultModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
+    this.consensusModel = consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'claude-opus-4-8');
     this.defaultApiKey = defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5');
     this.contentScriptFiles = contentScriptFiles || [];
     this.isCapturingProcess = false;

@@ -58,8 +58,8 @@ const cacheService = new SupabaseCacheService({
 
 const apiClient = new Key4uApiClient({
   defaultApiKey: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.KEY4U_API_KEY) || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : ''),
-  defaultModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'claude-opus-4-8'),
-  backupModels: typeof BACKUP_MODELS !== 'undefined' ? BACKUP_MODELS : ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite']
+  defaultModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash'),
+  backupModels: typeof BACKUP_MODELS !== 'undefined' ? BACKUP_MODELS : ['gemini-3.7-flash']
 });
 
 const quickCaptureService = new ScreenshotUploadService({
@@ -72,8 +72,8 @@ const quickCaptureService = new ScreenshotUploadService({
 
 const captureSolver = new StealthCaptureSolver({
   apiClient: apiClient,
-  defaultModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || 'claude-opus-4-8',
-  consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || 'gemini-3.5-flash',
+  defaultModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || 'gemini-3.7-flash',
+  consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || 'claude-opus-4-8',
   defaultApiKey: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.KEY4U_API_KEY) || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : ''),
   contentScriptFiles: CONTENT_SCRIPT_FILES
 });
@@ -87,7 +87,7 @@ async function sendTriggerAutoSolve(tabId, url, action = 'TRIGGER_CONTINUOUS_SOL
     if (chrome.runtime.lastError) {
       try {
         await chrome.scripting.executeScript({
-          target: { tabId: tabId, allFrames: true },
+          target: { tabId: tabId, allFrames: false },
           files: CONTENT_SCRIPT_FILES
         });
         setTimeout(() => {
@@ -129,6 +129,20 @@ function ensureDefaultSettings() {
       chrome.storage.local.set(updates);
     }
   });
+}
+
+function hasLocalStudentSession() {
+  return new Promise(resolve => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return resolve(false);
+    chrome.storage.local.get(['studentAuth'], result => {
+      const auth = result?.studentAuth;
+      resolve(Boolean(auth?.studentId && auth?.sessionToken));
+    });
+  });
+}
+
+function rejectUnauthenticated(sendResponse) {
+  sendResponse({ success: false, error: 'AUTH_REQUIRED' });
 }
 
 // Khởi tạo Context Menus
@@ -241,31 +255,43 @@ if (typeof chrome !== 'undefined') {
         sendResponse({ success: true });
         return true;
       } else if (request.action === (actions.CALL_KEY4U_AI || 'CALL_KEY4U_AI')) {
-        apiClient.solve({
-          task: request.task || 'solve',
-          prompt: request.prompt,
-          model: request.model,
-          apiKey: request.apiKey,
-          imageUrl: request.imageUrl,
-          systemPrompt: request.systemPrompt,
-          enableReasoning: request.enableReasoning,
-          reasoningEffort: request.reasoningEffort
-        })
-          .then(res => sendResponse({ success: true, data: res }))
-          .catch(err => sendResponse({ success: false, error: err.message }));
+        hasLocalStudentSession().then(authorized => {
+          if (!authorized) return rejectUnauthenticated(sendResponse);
+          return apiClient.solve({
+            task: request.task || 'solve',
+            prompt: request.prompt,
+            model: request.model,
+            apiKey: request.apiKey,
+            imageUrl: request.imageUrl,
+            systemPrompt: request.systemPrompt,
+            enableReasoning: request.enableReasoning,
+            reasoningEffort: request.reasoningEffort
+          })
+            .then(res => sendResponse({ success: true, data: res }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        }).catch(() => rejectUnauthenticated(sendResponse));
         return true;
       } else if (request.action === (actions.TRIGGER_QUICK_CAPTURE_UPLOAD || 'TRIGGER_M_CAPTURE_UPLOAD')) {
-        quickCaptureService.captureAndUpload(sender?.tab?.id)
-          .then(result => sendResponse(result))
-          .catch(err => sendResponse({ success: false, error: err.message }));
+        hasLocalStudentSession().then(authorized => {
+          if (!authorized) return rejectUnauthenticated(sendResponse);
+          return quickCaptureService.captureAndUpload(sender?.tab?.id)
+            .then(result => sendResponse(result))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        }).catch(() => rejectUnauthenticated(sendResponse));
         return true;
       } else if (request.action === (actions.TRIGGER_CROP_CAPTURE_SOLVE || 'TRIGGER_CROP_CAPTURE_SOLVE')) {
-        captureSolver.handleCaptureAndSolve(sender?.tab?.id, request.rect);
-        sendResponse({ success: true });
+        hasLocalStudentSession().then(authorized => {
+          if (!authorized) return rejectUnauthenticated(sendResponse);
+          captureSolver.handleCaptureAndSolve(sender?.tab?.id, request.rect);
+          sendResponse({ success: true });
+        }).catch(() => rejectUnauthenticated(sendResponse));
         return true;
       } else if (request.action === (actions.TRIGGER_CAPTURE_SOLVE || 'TRIGGER_CAPTURE_SOLVE')) {
-        captureSolver.handleCaptureAndSolve(sender?.tab?.id, null);
-        sendResponse({ success: true });
+        hasLocalStudentSession().then(authorized => {
+          if (!authorized) return rejectUnauthenticated(sendResponse);
+          captureSolver.handleCaptureAndSolve(sender?.tab?.id, null);
+          sendResponse({ success: true });
+        }).catch(() => rejectUnauthenticated(sendResponse));
         return true;
       }
     });

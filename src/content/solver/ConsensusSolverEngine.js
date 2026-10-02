@@ -1,7 +1,15 @@
 class ConsensusSolverEngine {
   constructor(options = {}) {
-    this.primaryModel = options.primaryModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'claude-opus-4-8');
-    this.consensusModel = options.consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.5-flash');
+    this.primaryModel = options.primaryModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
+    this.consensusModel = options.consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.7-flash');
+    this.models = options.models || (typeof CONSENSUS_MODELS !== 'undefined' ? CONSENSUS_MODELS : [
+      this.primaryModel,
+      'gemini-2.5-flash',
+      'gemini-3.5-flash-lite'
+    ]);
+    this.maxRetries = Number.isInteger(options.maxRetries)
+      ? options.maxRetries
+      : (typeof CONSENSUS_MAX_RETRIES !== 'undefined' ? CONSENSUS_MAX_RETRIES : 2);
     this.defaultApiKey = options.defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '');
   }
 
@@ -18,45 +26,17 @@ class ConsensusSolverEngine {
   async solveSingleChoiceQuestion(q) {
     const prompt = this.buildSingleChoicePrompt(q);
     const availableKeys = q.options.map(o => o.key);
+    let results = await this.solveRound(prompt, q.image, availableKeys);
+    if (this.isUnanimous(results)) return { ...results[0], consensus: true };
 
-    const [resp1, resp2] = await Promise.allSettled([
-      this.sendSolveRequest(prompt, this.primaryModel, q.image),
-      this.sendSolveRequest(prompt, this.consensusModel, q.image)
-    ]);
-
-    const ans1 = resp1.status === 'fulfilled' ? this.parseSingleChoiceAnswer(resp1.value, availableKeys) : null;
-    const ans2 = resp2.status === 'fulfilled' ? this.parseSingleChoiceAnswer(resp2.value, availableKeys) : null;
-
-    if (ans1 && ans2 && ans1.answer === ans2.answer) {
-      return ans1;
+    for (let retry = 0; retry < this.maxRetries; retry++) {
+      const debatePrompt = this.buildDebatePrompt(q, results, retry + 1);
+      results = await this.solveRound(debatePrompt, q.image, availableKeys);
+      if (this.isUnanimous(results)) return { ...results[0], consensus: true };
     }
 
-    // Nếu mismatch, kích hoạt Cross-Review
-    if (ans1 && ans2 && ans1.answer !== ans2.answer) {
-      const crossPrompt = `Bạn đang thực hiện phản biện độc lập cho câu hỏi trắc nghiệm sau:
-ĐỀ BÀI: ${q.title}
-${q.passage ? `BÀI ĐỌC: ${q.passage}\n` : ''}
-CÁC PHƯƠNG ÁN:
-${q.options.map(o => `${o.key}. ${o.text}`).join('\n')}
-
-Trước đó:
-- Model 1 đưa ra đáp án: ${ans1.answer}
-- Model 2 đưa ra đáp án: ${ans2.answer}
-
-QUY TẮC:
-1. Đánh giá xem ${ans1.answer} hay ${ans2.answer} mới là đáp án đúng, hoặc chọn đáp án đúng thực tế nếu cả hai sai.
-2. Trả về DUY NHẤT một khối JSON: {"answer": "X"}`;
-
-      try {
-        const reviewResp = await this.sendSolveRequest(crossPrompt, this.consensusModel, q.image);
-        const reviewedAns = this.parseSingleChoiceAnswer(reviewResp, availableKeys);
-        if (reviewedAns && reviewedAns.answer) {
-          return reviewedAns;
-        }
-      } catch (e) {}
-    }
-
-    return ans1 || ans2 || null;
+    const strongest = this.selectStrongestResult(results);
+    return strongest ? { ...strongest, consensus: false, consensusStatus: 'unresolved' } : null;
   }
 
   async solveTrueFalseQuestion(q) {
@@ -77,14 +57,81 @@ QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
 }`;
 
     try {
-      const resp = await this.sendSolveRequest(prompt, this.primaryModel, q.image);
-      if (resp && resp.answers) return resp;
-      if (typeof resp === 'string') {
-        const match = resp.match(/\{[\s\S]*\}/);
-        if (match) return JSON.parse(match[0]);
+      const results = await this.solveRound(prompt, q.image, [], 'solve');
+      if (this.isUnanimous(results)) return { ...results[0], consensus: true };
+      let latest = results;
+      for (let retry = 0; retry < this.maxRetries; retry++) {
+        const debatePrompt = this.buildTrueFalseDebatePrompt(q, latest, retry + 1);
+        latest = await this.solveRound(debatePrompt, q.image, [], 'solve');
+        if (this.isUnanimous(latest)) return { ...latest[0], consensus: true };
       }
+      const strongest = this.selectStrongestResult(latest);
+      if (strongest) return { ...strongest, consensus: false, consensusStatus: 'unresolved' };
     } catch (e) {}
     return null;
+  }
+
+  async solveRound(prompt, imageUrl, availableKeys = [], task = 'single_solve') {
+    const responses = await Promise.allSettled(this.models.map(model =>
+      this.sendSolveRequest(prompt, model, imageUrl, task)
+    ));
+    return responses
+      .filter(result => result.status === 'fulfilled')
+      .map(result => this.parseResult(result.value, availableKeys))
+      .filter(Boolean);
+  }
+
+  parseResult(result, availableKeys) {
+    if (result && typeof result === 'object' && (result.answer || result.answers)) {
+      if (result.answer) return this.parseSingleChoiceAnswer(result, availableKeys);
+      return result;
+    }
+    if (typeof result !== 'string') return null;
+    try {
+      return this.parseResult(JSON.parse(result.trim()), availableKeys);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  isUnanimous(results) {
+    if (results.length !== this.models.length) return false;
+    const answers = results.map(result => JSON.stringify(result.answers || result.answer));
+    return answers.every(answer => answer === answers[0]);
+  }
+
+  selectStrongestResult(results) {
+    return results
+      .filter(result => result && (result.answer || result.answers))
+      .sort((a, b) => String(b.reason || '').length - String(a.reason || '').length)[0] || null;
+  }
+
+  buildDebatePrompt(q, results, round) {
+    return `${this.buildSingleChoicePrompt(q)}
+
+DEBATE ROUND ${round}: Các kết quả độc lập bên dưới chỉ là dữ liệu để kiểm tra, không phải đáp án đúng:
+${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
+
+Hãy giải lại từ đầu, đối chiếu mọi phương án, tìm nguyên nhân bất đồng và sửa đáp án nếu cần. Không giữ đáp án cũ chỉ vì đó là đáp án ban đầu.
+Trả về duy nhất JSON: {"answer":"X","reason":"short verification"}`;
+  }
+
+  buildTrueFalseDebatePrompt(q, results, round) {
+    return `${this.solveTrueFalsePrompt(q)}
+
+DEBATE ROUND ${round}: Kiểm tra lại độc lập các kết quả sau:
+${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
+Trả về duy nhất JSON theo schema answers, không thêm văn bản.`;
+  }
+
+  solveTrueFalsePrompt(q) {
+    return `Bạn là chuyên gia giải đề trắc nghiệm Đúng / Sai.
+ĐỀ BÀI: ${q.title}
+${q.passage ? `BÀI ĐỌC: ${q.passage}\n` : ''}
+CÁC Ý CẦN ĐÁNH GIÁ:
+${q.items.map(it => `${it.key}. ${it.text}`).join('\n')}
+
+Trả về duy nhất JSON: {"answers":{"A":"Đúng","B":"Sai","C":"Đúng","D":"Sai"}}`;
   }
 
   buildSingleChoicePrompt(q) {
@@ -99,7 +146,8 @@ AVAILABLE_OPTIONS: [${q.options.map(o => `"${o.key}"`).join(', ')}]
 QUY TẮC: Suy luận ngầm và chỉ trả về DUY NHẤT một khối JSON: {"answer": "X"}`;
   }
 
-  async sendSolveRequest(prompt, model, imageUrl) {
+  async sendSolveRequest(prompt, model, imageUrl, task = 'solve') {
+    const config = typeof APP_CONFIG !== 'undefined' ? APP_CONFIG : {};
     return new Promise((resolve, reject) => {
       const action = globalThis.MessageActions?.CALL_KEY4U_AI || 'CALL_KEY4U_AI';
       chrome.runtime.sendMessage({
@@ -107,8 +155,9 @@ QUY TẮC: Suy luận ngầm và chỉ trả về DUY NHẤT một khối JSON: 
         prompt: prompt,
         model: model,
         imageUrl: imageUrl,
-        enableReasoning: true,
-        reasoningEffort: 'high'
+        task: task,
+        enableReasoning: config.ENABLE_REASONING !== false,
+        reasoningEffort: config.REASONING_EFFORT || 'high'
       }, res => {
         if (chrome.runtime.lastError) {
           return reject(new Error(chrome.runtime.lastError.message));
@@ -130,16 +179,18 @@ QUY TẮC: Suy luận ngầm và chỉ trả về DUY NHẤT một khối JSON: 
       key = res.answer.toUpperCase().trim();
     } else if (typeof res === 'string') {
       const trimmed = res.trim();
-      if (availableKeys.includes(trimmed.toUpperCase())) {
-        key = trimmed.toUpperCase();
-      } else {
-        const m = trimmed.match(/\b([A-H])\b/);
-        if (m) key = m[1].toUpperCase();
-      }
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed.answer === 'string') key = parsed.answer.toUpperCase().trim();
+      } catch (e) {}
     }
 
     if (key && (availableKeys.length === 0 || availableKeys.includes(key))) {
-      return { answer: key };
+      const result = { answer: key };
+      if (typeof res === 'object' && typeof res.reason === 'string') {
+        result.reason = res.reason;
+      }
+      return result;
     }
     return null;
   }

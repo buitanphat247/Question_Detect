@@ -40,9 +40,9 @@ function sync() {
   const enableScreenshotUpload = envVars.ENABLE_SCREENSHOT_UPLOAD ? envVars.ENABLE_SCREENSHOT_UPLOAD.toLowerCase() === 'true' : true;
   const screenshotUploadBucket = envVars.SCREENSHOT_UPLOAD_BUCKET || 'screenshots';
   const screenshotUploadMaxBytes = Number(envVars.SCREENSHOT_UPLOAD_MAX_BYTES) || 6000000;
-  const defaultModel = envVars.DEFAULT_MODEL || 'claude-opus-4-8';
-  const consensusModel = envVars.CONSENSUS_MODEL || 'gemini-3.5-flash';
-  const detectModel = envVars.DETECT_MODEL || 'gemini-3.5-flash';
+  const defaultModel = envVars.DEFAULT_MODEL || 'gemini-3.7-flash';
+  const consensusModel = envVars.CONSENSUS_MODEL || 'gemini-3.7-flash';
+  const detectModel = envVars.DETECT_MODEL || 'gemini-3.7-flash';
   const apiKey = envVars.KEY4U_API_KEY || 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
 
   const newConfigContent = `// SILENT STEALTH MODE: Vô hiệu hóa toàn bộ console để DevTools luôn sạch sẽ 100%

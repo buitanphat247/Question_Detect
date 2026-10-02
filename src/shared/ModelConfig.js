@@ -1,13 +1,17 @@
 (function registerModelConfig(scope) {
   const DEFAULT_API_KEY = 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
-  const DEFAULT_MODEL = 'claude-opus-4-8';
-  const CONSENSUS_MODEL = 'gemini-3.5-flash';
-  const DETECT_MODEL = 'gemini-3.5-flash';
+  const DEFAULT_MODEL = 'gemini-3.7-flash';
+  const CONSENSUS_MODEL = 'gemini-3.7-flash';
+  const DETECT_MODEL = 'gemini-3.7-flash';
+  const CONSENSUS_MODELS = [
+    'gemini-3.7-flash',
+    'gemini-2.5-flash',
+    'gemini-3.5-flash-lite'
+  ];
+  const CONSENSUS_MAX_RETRIES = 2;
 
   const BACKUP_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-3.7-flash',
-    'gemini-3.5-flash-lite'
+    'gemini-3.7-flash'
   ];
   const BACKUP_MODEL = BACKUP_MODELS[0];
 
@@ -21,6 +25,8 @@
     DEFAULT_MODEL,
     CONSENSUS_MODEL,
     DETECT_MODEL,
+    CONSENSUS_MODELS,
+    CONSENSUS_MAX_RETRIES,
     BACKUP_MODELS,
     BACKUP_MODEL,
     KEY4U_SINGLE_SOLVE_TIMEOUT_MS,
@@ -34,6 +40,8 @@
   scope.DEFAULT_MODEL = DEFAULT_MODEL;
   scope.CONSENSUS_MODEL = CONSENSUS_MODEL;
   scope.DETECT_MODEL = DETECT_MODEL;
+  scope.CONSENSUS_MODELS = CONSENSUS_MODELS;
+  scope.CONSENSUS_MAX_RETRIES = CONSENSUS_MAX_RETRIES;
   scope.BACKUP_MODELS = BACKUP_MODELS;
   scope.BACKUP_MODEL = BACKUP_MODEL;
 

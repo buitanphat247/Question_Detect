@@ -1,7 +1,8 @@
 class AnchorBasedScanner {
   static scan(scanRoot, passageMap = {}) {
     if (!scanRoot) return [];
-    const anchors = Array.from(scanRoot.querySelectorAll('input[type="radio"], input[type="checkbox"]')).filter(TextUtils.isVisible);
+    const anchors = Array.from(scanRoot.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+      .filter(inp => inp.value !== '-1' && !inp.closest('.clear-choice, .clearchoice, .clear'));
     if (anchors.length < 2) return [];
 
     const grouped = AnchorBasedScanner.groupAnchors(anchors);
@@ -14,20 +15,52 @@ class AnchorBasedScanner {
 
       const qNum = index + 1;
       const qId = `qa-detected-anchor-${qNum}`;
-      lca.setAttribute('data-qa-id', qId);
+      
+      // Tìm container câu hỏi bao trùm (thường là card hoặc formulation hoặc cha của lca)
+      const qCard = lca.closest('.que, .formulation, .card, [class*="question"], [id^="q"], form > div') || lca.parentElement || lca;
+      qCard.setAttribute('data-qa-id', qId);
 
-      const questionText = TextUtils.extractRichText(lca);
-      const image = DomMediaExtractor.extractImageFromNode(lca);
+      // Trích xuất nội dung câu hỏi (loại bỏ phần đáp án để không bị trùng)
+      let questionText = '';
+      const qTextEl = qCard.querySelector('.qtext, .formulation .qtext, [class*="question-text"], [class*="stem"], p, h3, h4');
+      if (qTextEl && !lca.contains(qTextEl)) {
+        questionText = TextUtils.extractRichText(qTextEl);
+      } else {
+        const clone = qCard.cloneNode(true);
+        // Xóa phần đáp án khỏi clone để lấy stem câu hỏi
+        clone.querySelectorAll('input, label, .answer, .absubpart, [class*="option"], [class*="choice"], .info, button').forEach(el => el.remove());
+        questionText = TextUtils.extractRichText(clone);
+      }
+
+      if (!questionText || questionText.length < 3) {
+        // Thử lấy text trước LCA
+        let prev = lca.previousElementSibling;
+        while (prev && !questionText) {
+          questionText = TextUtils.extractRichText(prev);
+          prev = prev.previousElementSibling;
+        }
+      }
+
+      const image = DomMediaExtractor.extractImageFromNode(qCard);
 
       const options = [];
       group.forEach((input, optIdx) => {
         let key = String.fromCharCode(65 + optIdx);
-        const container = input.closest('label, div, li, tr, p') || input.parentElement;
-        const rawOptText = TextUtils.cleanText(container?.innerText || container?.textContent || '');
+        const container = input.closest('label, .r0, .r1, .form-check, .custom-control, .d-flex, li, tr, p, div') || input.parentElement;
+        const label = (input.id ? qCard.querySelector(`label[for="${input.id}"]`) : null) || input.closest('label') || container;
 
-        const m = rawOptText.match(TextUtils.OPTION_PREFIX_REGEX);
-        if (m) key = m[1].toUpperCase();
+        const numSpan = label?.querySelector('.answernumber, .option-letter, .choice-label');
+        if (numSpan) {
+          const spanTxt = (numSpan.innerText || numSpan.textContent || '').trim();
+          const sm = spanTxt.match(/([A-Za-zĐđ0-9])/);
+          if (sm) key = sm[1].toUpperCase();
+        } else {
+          const rawOptText = TextUtils.cleanText(label?.innerText || container?.innerText || '');
+          const m = rawOptText.match(TextUtils.OPTION_PREFIX_REGEX);
+          if (m) key = m[1].toUpperCase();
+        }
 
+        const rawOptText = TextUtils.cleanText(label?.innerText || container?.innerText || '');
         const optText = TextUtils.cleanOptionText(rawOptText, key);
 
         input.setAttribute('data-qa-for', qId);
@@ -36,11 +69,16 @@ class AnchorBasedScanner {
           container.setAttribute('data-qa-for', qId);
           container.setAttribute('data-qa-opt', key);
         }
+        if (label && label !== container) {
+          label.setAttribute('data-qa-for', qId);
+          label.setAttribute('data-qa-opt', key);
+        }
 
         options.push({
           key: key,
           text: optText,
           input: input,
+          label: label,
           element: container
         });
       });
@@ -50,11 +88,11 @@ class AnchorBasedScanner {
           id: qId,
           num: qNum,
           type: 'single_choice',
-          title: questionText,
+          title: questionText || `Câu hỏi ${qNum}`,
           options: options,
           passage: passageMap[qNum] || null,
           image: image,
-          element: lca
+          element: qCard
         });
       }
     });
@@ -79,7 +117,6 @@ class AnchorBasedScanner {
     if (nameMap.size > 0) {
       nameMap.forEach(list => groups.push(list));
     } else {
-      // Nhóm theo khoảng cách DOM
       let current = [];
       for (let i = 0; i < anchors.length; i++) {
         current.push(anchors[i]);

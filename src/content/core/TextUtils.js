@@ -1,6 +1,6 @@
 class TextUtils {
   static QUESTION_HEADER_REGEX = /(?:^|\s)(?:câu|question|quest|q|bài|item|câu\s*hỏi)\s*(\d+)\b(?![\/:]\d)/i;
-  static OPTION_PREFIX_REGEX = /^\s*([A-Za-zĐđ①-⑩❶-❿Ⓐ-Ⓗ])[\.\)\/:\–—\-]\s*(.*)$/;
+  static OPTION_PREFIX_REGEX = /^\s*([A-Za-zĐđ①-⑩❶-❿Ⓐ-Ⓗ0-9])[\.\)\/:\–—\-]\s*(.*)$/;
 
   static SYSTEM_SPAM_WORDS = [
     'clear my choice', 'xóa lựa chọn', 'chưa trả lời', 'not yet answered',
@@ -18,11 +18,18 @@ class TextUtils {
     if (elem.nodeType !== 1) return false;
     const style = window.getComputedStyle ? window.getComputedStyle(elem) : null;
     if (!style) return true;
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+    if (style.display === 'none' || style.visibility === 'hidden') {
+      return false;
+    }
+    const isInput = elem.tagName === 'INPUT' || elem.tagName === 'SELECT' || elem.tagName === 'TEXTAREA';
+    if (!isInput && style.opacity === '0') {
       return false;
     }
     const rect = elem.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    if (!isInput && rect.width === 0 && rect.height === 0 && elem.offsetHeight === 0 && elem.offsetWidth === 0) {
+      return false;
+    }
+    return true;
   }
 
   static cleanText(str) {
@@ -43,6 +50,23 @@ class TextUtils {
       .trim();
   }
 
+  static hashQuestion(question) {
+    const parts = [question?.title || '', question?.passage || ''];
+    if (Array.isArray(question?.options)) {
+      parts.push(...question.options.map(o => `${o.key}:${o.text}`));
+    }
+    if (Array.isArray(question?.items)) {
+      parts.push(...question.items.map(o => `${o.key}:${o.text}`));
+    }
+    const input = TextUtils.normalizeForMatch(parts.join('\n'));
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+      hash ^= input.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
   static isSpamText(text) {
     const lower = (text || '').toLowerCase().trim();
     if (!lower || lower.length < 2) return true;
@@ -53,7 +77,7 @@ class TextUtils {
     if (!text) return '';
     let cleaned = text.trim();
 
-    const inlinePattern = /^\s*([A-Za-zĐđ①-⑩❶-❿Ⓐ-Ⓗ])[\.\)\/:\–—\-]\s*(.*)$/;
+    const inlinePattern = /^\s*([A-Za-zĐđ①-⑩❶-❿Ⓐ-Ⓗ0-9])[\.\)\/:\–—\-]\s*(.*)$/;
     const m = cleaned.match(inlinePattern);
     if (m) {
       if (!expectedKey || m[1].toUpperCase() === expectedKey.toUpperCase()) {

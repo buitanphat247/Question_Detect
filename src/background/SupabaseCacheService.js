@@ -23,7 +23,7 @@ class SupabaseCacheService {
     try {
       const validHashes = hashes.filter(Boolean);
       if (validHashes.length === 0) return {};
-      const hashList = validHashes.map(h => `"${h}"`).join(',');
+      const hashList = validHashes.map(h => `"${String(h).replace(/"/g, '')}"`).join(',');
       const supabase = this.getSupabaseConfig();
 
       const res = await fetch(`${supabase.URL}/rest/v1/questions_cache?question_hash=in.(${hashList})&select=*`, {

@@ -1,8 +1,8 @@
 class Key4uApiClient {
   constructor(options = {}) {
     this.defaultApiKey = options.defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5');
-    this.defaultModel = options.defaultModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'claude-opus-4-8');
-    this.backupModels = options.backupModels || (typeof BACKUP_MODELS !== 'undefined' ? BACKUP_MODELS : ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite']);
+    this.defaultModel = options.defaultModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
+    this.backupModels = options.backupModels || (typeof BACKUP_MODELS !== 'undefined' ? BACKUP_MODELS : ['gemini-3.7-flash']);
   }
 
   async solve(promptOrOptions, legacyModel, legacyApiKey, legacyImageUrl, legacyTask) {
@@ -107,8 +107,10 @@ class Key4uApiClient {
     }
 
     // Tự động đổi model theo danh sách backup đa tầng
-    const isAuthOrRateLimit = res && (res.status === 401 || res.status === 403 || res.status === 429);
-    if (!res || (!res.ok && !isAuthOrRateLimit)) {
+    // Thử model dự phòng cho mọi lỗi request. Riêng lỗi 401/403 thường là
+    // lỗi key hoặc quyền, nhưng vẫn cần thử vì gateway có thể áp chính sách
+    // khác nhau theo model.
+    if (!res || !res.ok) {
       for (let bIdx = 0; bIdx < this.backupModels.length; bIdx++) {
         const backupModel = this.backupModels[bIdx];
         if (backupModel === m) continue;
@@ -148,13 +150,11 @@ class Key4uApiClient {
     }
 
     if (isSingleSolve) {
-      const trimmed = content.trim();
-      return {
-        answer: trimmed,
-        content: trimmed,
-        raw: content,
-        text: trimmed
-      };
+      const parsedSingle = this.extractJsonFromText(content, false);
+      if (!parsedSingle || typeof parsedSingle.answer !== 'string') {
+        throw new Error('AI không trả về JSON đáp án hợp lệ.');
+      }
+      return { answer: parsedSingle.answer.trim(), raw: content };
     }
 
     const parsed = this.extractJsonFromText(content, isExtractTask);
@@ -169,27 +169,7 @@ class Key4uApiClient {
       return { questions: [], rawContent: content, error: 'Không phân tích được danh sách câu hỏi.' };
     }
 
-    // Fail-Safe Conflict Resolver
-    if (parsed && typeof parsed === 'object') {
-      const explanation = parsed.explanation || content;
-      if (parsed.answer && explanation) {
-        const matchAffirm = explanation.match(/(?:tương\s*ứng\s*(?:với)?\s*(?:phương\s*án|đáp\s*án)?|đáp\s*án\s*(?:đúng|chính\s*xác)\s*(?:là)?|chọn\s*(?:đáp\s*án|phương\s*án)?)\s*([A-H])\b/i);
-        if (matchAffirm) {
-          const trueKey = matchAffirm[1].toUpperCase();
-          if (trueKey !== parsed.answer.toUpperCase()) {
-            parsed.answer = trueKey;
-          }
-        }
-      }
-    }
-
-    let finalResult = parsed;
-    if (!finalResult) {
-      const match = content.match(/([A-H])[\.\)\:]/i) || content.match(/\b([A-H])\b/i);
-      if (match) {
-        finalResult = { answer: match[1].toUpperCase() };
-      }
-    }
+    const finalResult = parsed;
 
     if (!finalResult) {
       throw new Error('AI không trả về kết quả hợp lệ.');
@@ -227,29 +207,16 @@ class Key4uApiClient {
     if (!text) return null;
     let cleaned = text.trim();
 
-    const codeMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    if (codeMatch) {
-      try { return JSON.parse(codeMatch[1].trim()); } catch (e) {}
-      cleaned = codeMatch[1].trim();
-    }
-
-    try { return JSON.parse(cleaned); } catch (e) {}
-
-    if (isExtractTask || cleaned.includes('[')) {
-      const firstBracket = cleaned.indexOf('[');
-      const lastBracket = cleaned.lastIndexOf(']');
-      if (firstBracket !== -1 && lastBracket > firstBracket) {
-        const jsonArr = cleaned.slice(firstBracket, lastBracket + 1);
-        try { return JSON.parse(jsonArr); } catch (e) {}
+    const fenceStart = cleaned.indexOf('```');
+    if (fenceStart !== -1) {
+      const contentStart = cleaned.indexOf('\n', fenceStart);
+      const fenceEnd = cleaned.indexOf('```', contentStart + 1);
+      if (contentStart !== -1 && fenceEnd !== -1) {
+        cleaned = cleaned.slice(contentStart + 1, fenceEnd).trim();
       }
     }
 
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      const jsonObj = cleaned.slice(firstBrace, lastBrace + 1);
-      try { return JSON.parse(jsonObj); } catch (e) {}
-    }
+    try { return JSON.parse(cleaned); } catch (e) {}
 
     return null;
   }

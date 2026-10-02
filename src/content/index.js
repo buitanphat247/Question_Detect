@@ -4,6 +4,9 @@
  */
 
 (function initContentApp() {
+  if (globalThis.__qaContentAppInitialized) return;
+  globalThis.__qaContentAppInitialized = true;
+
   // SILENT STEALTH MODE: Vô hiệu hóa toàn bộ console trong content script để DevTools luôn sạch sẽ 100%
   if (typeof console !== 'undefined') {
     console.log = () => {};
@@ -15,8 +18,8 @@
   // Khởi tạo các thành phần
   const snipOverlay = new StealthSnipOverlay();
   const solverEngine = new ConsensusSolverEngine({
-    primaryModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'claude-opus-4-8'),
-    consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.5-flash'),
+    primaryModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash'),
+    consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'claude-opus-4-8'),
     defaultApiKey: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.KEY4U_API_KEY) || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '')
   });
 

@@ -3,8 +3,8 @@ class QuizCardScanner {
     if (!scanRoot) return [];
     const questions = [];
     const candidateCards = Array.from(scanRoot.querySelectorAll(
-      '.yh-question-card, [class*="question-card"], [id^="question-"], .exam-question, .quiz-item, .test-question'
-    )).filter(TextUtils.isVisible);
+      '.yh-question-card, [class*="question-card"], [id^="question-"], .exam-question, .quiz-item, .test-question, .question-item, .question-holder, .ques-item, [data-question-id]'
+    ));
 
     candidateCards.forEach((card, index) => {
       const qNum = QuizCardScanner.extractQuestionNumber(card, index + 1);
@@ -13,8 +13,14 @@ class QuizCardScanner {
 
       const isTrueFalse = card.querySelectorAll('.yh-tf4-row').length > 0;
 
-      const stemEl = card.querySelector('.yh-question-stem, .question-text, .stem, .title, .content, h4, h5') || card;
-      const questionText = TextUtils.extractRichText(stemEl);
+      const stemEl = card.querySelector('.yh-question-stem, .question-text, .stem, .title, .content, h4, h5, p') || card;
+      let questionText = TextUtils.extractRichText(stemEl);
+      if (!questionText || stemEl === card) {
+        const clone = card.cloneNode(true);
+        clone.querySelectorAll('label, input, [class*="option"], [class*="choice"], button').forEach(el => el.remove());
+        questionText = TextUtils.extractRichText(clone);
+      }
+
       const image = DomMediaExtractor.extractImageFromNode(card);
 
       if (isTrueFalse) {
@@ -67,15 +73,22 @@ class QuizCardScanner {
         }
       } else {
         const options = [];
-        const optionRows = Array.from(card.querySelectorAll('.yh-option, .option, .choice, .form-check, .ant-radio-wrapper, .ant-checkbox-wrapper, label'));
+        const optionRows = Array.from(card.querySelectorAll('.yh-option, .option, .choice, .form-check, .ant-radio-wrapper, .ant-checkbox-wrapper, label, [class*="option-item"]'));
 
         optionRows.forEach((row, optIdx) => {
           const input = row.querySelector('input[type="radio"], input[type="checkbox"]') || (row.tagName === 'INPUT' ? row : null);
           let key = String.fromCharCode(65 + optIdx);
           const rawOptText = TextUtils.cleanText(row.innerText || row.textContent || '');
 
-          const m = rawOptText.match(TextUtils.OPTION_PREFIX_REGEX);
-          if (m) key = m[1].toUpperCase();
+          const numSpan = row.querySelector('.answernumber, .option-letter, .choice-label, [class*="prefix"], [class*="letter"]');
+          if (numSpan) {
+            const spanTxt = (numSpan.innerText || numSpan.textContent || '').trim();
+            const sm = spanTxt.match(/([A-Za-zĐđ0-9])/);
+            if (sm) key = sm[1].toUpperCase();
+          } else {
+            const m = rawOptText.match(TextUtils.OPTION_PREFIX_REGEX);
+            if (m) key = m[1].toUpperCase();
+          }
 
           const optText = TextUtils.cleanOptionText(rawOptText, key);
 
@@ -90,6 +103,7 @@ class QuizCardScanner {
             key: key,
             text: optText,
             input: input,
+            label: row.tagName === 'LABEL' ? row : row.querySelector('label') || row,
             element: row
           });
         });

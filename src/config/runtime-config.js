@@ -8,7 +8,7 @@ if (typeof console !== 'undefined') {
 
 // =========================================================================
 // CONFIGURATION SYSTEM (ĐỒNG BỘ TỰ ĐỘNG TỪ .ENV)
-// Tự động sinh bởi sync_env.js vào lúc: 15:45:37 2/10/2026
+// Tự động sinh bởi sync_env.js vào lúc: 18:43:01 2/10/2026
 // =========================================================================
 
 (function () {
@@ -27,9 +27,9 @@ if (typeof console !== 'undefined') {
     SCREENSHOT_UPLOAD_MAX_BYTES: 6000000,
 
     // 3. AI MODELS & API KEY
-    DEFAULT_MODEL: 'claude-opus-4-8',
-    CONSENSUS_MODEL: 'gemini-3.5-flash',
-    DETECT_MODEL: 'gemini-3.5-flash',
+    DEFAULT_MODEL: 'gemini-3.7-flash',
+    CONSENSUS_MODEL: 'gemini-3.7-flash',
+    DETECT_MODEL: 'gemini-3.7-flash',
     KEY4U_API_KEY: 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5'
   };
 
