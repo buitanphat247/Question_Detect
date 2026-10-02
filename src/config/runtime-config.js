@@ -30,7 +30,7 @@ if (typeof console !== 'undefined') {
     DEFAULT_MODEL: 'gemini-3.7-flash',
     CONSENSUS_MODEL: 'gemini-3.7-flash',
     DETECT_MODEL: 'gemini-3.7-flash',
-    KEY4U_API_KEY: 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5'
+    KEY4U_API_KEY: ''
   };
 
   var reasoningHelper = function () {

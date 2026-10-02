@@ -43,7 +43,8 @@ function sync() {
   const defaultModel = envVars.DEFAULT_MODEL || 'gemini-3.7-flash';
   const consensusModel = envVars.CONSENSUS_MODEL || 'gemini-3.7-flash';
   const detectModel = envVars.DETECT_MODEL || 'gemini-3.7-flash';
-  const apiKey = envVars.KEY4U_API_KEY || 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
+  // API keys must stay in extension storage, never in generated source/bundles.
+  const apiKey = '';
 
   const newConfigContent = `// SILENT STEALTH MODE: Vô hiệu hóa toàn bộ console để DevTools luôn sạch sẽ 100%
 if (typeof console !== 'undefined') {

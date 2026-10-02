@@ -47,8 +47,8 @@ class ContinuousSolveRunner {
 
       const cached = await this.getCachedResult(targetQ);
       const result = cached || await this.solverEngine.solveQuestion(targetQ);
-      if (result) {
-        if (!cached) this.saveCachedResult(targetQ, result);
+      if (result && result.consensus !== false) {
+        if (!cached && result.consensus === true) this.saveCachedResult(targetQ, result);
         if (targetQ.type === 'true_false_group' && result.answers) {
           Object.entries(result.answers).forEach(([key, val]) => {
             const isTrue = /đúng|true/i.test(val);
@@ -127,8 +127,8 @@ class ContinuousSolveRunner {
         const cached = await this.getCachedResult(q);
         const result = cached || await this.solverEngine.solveQuestion(q);
 
-        if (result) {
-          if (!cached) this.saveCachedResult(q, result);
+        if (result && result.consensus !== false) {
+          if (!cached && result.consensus === true) this.saveCachedResult(q, result);
           if (q.type === 'true_false_group' && result.answers) {
             Object.entries(result.answers).forEach(([key, val]) => {
               const isTrue = /đúng|true/i.test(val);
@@ -197,7 +197,8 @@ class ContinuousSolveRunner {
       const action = globalThis.MessageActions?.CHECK_SUPABASE_BATCH || 'CHECK_SUPABASE_BATCH';
       const response = await new Promise(resolve => chrome.runtime.sendMessage({ action, hashes: [hash] }, resolve));
       const item = response?.data?.[hash];
-      return item?.answer || null;
+      const answer = item?.answer;
+      return answer && answer.consensus === true ? answer : null;
     } catch (e) { return null; }
   }
 

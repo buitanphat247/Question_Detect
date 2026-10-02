@@ -2,8 +2,11 @@ class StealthCaptureSolver {
   constructor({ apiClient, defaultModel, consensusModel, defaultApiKey, contentScriptFiles } = {}) {
     this.apiClient = apiClient || new Key4uApiClient();
     this.defaultModel = defaultModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
-    this.consensusModel = consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'claude-opus-4-8');
-    this.defaultApiKey = defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5');
+    this.consensusModel = consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.7-flash');
+    this.consensusModels = [...new Set(
+      (typeof CONSENSUS_MODELS !== 'undefined' ? CONSENSUS_MODELS : [this.defaultModel, this.consensusModel, 'gemini-2.5-flash-lite'])
+    )].filter(Boolean).slice(0, 3);
+    this.defaultApiKey = defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '');
     this.contentScriptFiles = contentScriptFiles || [];
     this.isCapturingProcess = false;
   }
@@ -110,84 +113,24 @@ QUY TẮC BẮT BUỘC:
   ]
 }`;
 
-      // 5. Chạy song song 2 Model đối chiếu (Dual Model Consensus)
-      const [resp1, resp2] = await Promise.allSettled([
-        this.apiClient.solve({
-          task: 'solve',
-          prompt: prompt,
-          model: primaryModel,
-          apiKey: apiKey,
-          imageUrl: screenshotUrl,
-          enableReasoning: enableReasoning,
-          reasoningEffort: reasoningEffort
-        }),
-        this.apiClient.solve({
-          task: 'solve',
-          prompt: prompt,
-          model: secondaryModel,
-          apiKey: apiKey,
-          imageUrl: screenshotUrl,
-          enableReasoning: enableReasoning,
-          reasoningEffort: reasoningEffort
-        })
-      ]);
+      // 5. Ba model giải độc lập song song; bất đồng phải qua debate đủ ba model.
+      const firstRound = await this.runVisionRound(prompt, this.consensusModels, apiKey, screenshotUrl, enableReasoning, reasoningEffort);
+      let items = this.extractUnanimousItems(firstRound);
+      const unresolved = this.getCandidateItems(firstRound).filter(item => !items.some(done => (done.num || 1) === (item.num || 1)));
 
-      const res1 = resp1.status === 'fulfilled' ? resp1.value : null;
-      const res2 = resp2.status === 'fulfilled' ? resp2.value : null;
+      if (unresolved.length > 0) {
+        const debateResults = await Promise.all(unresolved.map(async candidate => {
+          const qNum = candidate.num || 1;
+          const debatePrompt = `Bạn đang kiểm tra lại câu hỏi số ${qNum} trong ảnh.
+Các đáp án độc lập trước đó:
+${candidate.results.map((item, index) => `MODEL ${index + 1}: ${JSON.stringify(item)}`).join('\n')}
 
-      const items1 = this.getItemsList(res1);
-      const items2 = this.getItemsList(res2);
-
-      let items = [];
-
-      if (items1.length > 0 && items2.length > 0) {
-        const map2 = new Map(items2.map(it => [it.num || 1, it]));
-        for (const it1 of items1) {
-          const qNum = it1.num || 1;
-          const it2 = map2.get(qNum);
-          if (it2 && it1.answer === it2.answer) {
-            items.push(it1);
-          } else if (it2 && it1.answer !== it2.answer) {
-            // Kích hoạt Cross-Review phản biện
-            try {
-              const crossPrompt = `Bạn đang thực hiện phản biện độc lập cho câu hỏi trắc nghiệm trong ảnh đính kèm.
-Trước đó:
-- Model 1 đưa ra đáp án: ${it1.answer}
-- Model 2 đưa ra đáp án: ${it2.answer}
-
-QUY TẮC BẮT BUỘC:
-1. Quan sát kỹ lại ảnh câu hỏi và các phương án. Dịch ngầm và suy luận ngầm độc lập (silent reasoning).
-2. Kiểm tra kỹ từ phủ định (NOT, EXCEPT, SAI, KHÔNG ĐÚNG, NGOẠI TRỪ) và các tính toán/dữ kiện trong ảnh.
-3. Đánh giá xem ${it1.answer} hay ${it2.answer} mới là đáp án thực sự chính xác, hoặc nếu cả 2 đều sai thì chọn đáp án đúng thực tế.
-4. Trả về DUY NHẤT một khối JSON: {"num": ${qNum}, "type": "single_choice", "answer": "X"}`;
-
-              const reviewResp = await this.apiClient.solve({
-                task: 'solve',
-                prompt: crossPrompt,
-                model: secondaryModel,
-                apiKey: apiKey,
-                imageUrl: screenshotUrl,
-                enableReasoning: enableReasoning,
-                reasoningEffort: reasoningEffort
-              });
-              const reviewedList = this.getItemsList(reviewResp);
-              const reviewedItem = reviewedList.find(r => (r.num || 1) === qNum) || reviewedList[0];
-              if (reviewedItem && reviewedItem.answer) {
-                items.push(reviewedItem);
-              } else {
-                items.push(it1);
-              }
-            } catch (crossErr) {
-              items.push(it1);
-            }
-          } else {
-            items.push(it1);
-          }
-        }
-      } else if (items1.length > 0) {
-        items = items1;
-      } else if (items2.length > 0) {
-        items = items2;
+Hãy giải lại từ đầu, không ưu tiên đáp án nào chỉ vì là đáp án cũ. Kiểm tra phủ định, dữ kiện, hình ảnh và tính toán. Nếu thông tin chưa đủ, không đoán.
+Trả về duy nhất JSON: {"questions":[{"num":${qNum},"type":"single_choice","answer":"X"}]}`;
+          const round = await this.runVisionRound(debatePrompt, this.consensusModels, apiKey, screenshotUrl, enableReasoning, reasoningEffort);
+          return this.extractUnanimousItems(round).find(item => (item.num || 1) === qNum) || null;
+        }));
+        items = items.concat(debateResults.filter(Boolean));
       }
 
       if (items.length === 0) {
@@ -268,6 +211,58 @@ QUY TẮC BẮT BUỘC:
     if (Array.isArray(res)) return res;
     if (res.answer || res.answers) return [res];
     return [];
+  }
+
+  async runVisionRound(prompt, models, apiKey, imageUrl, enableReasoning, reasoningEffort) {
+    return Promise.allSettled(models.map(model => this.apiClient.solve({
+      task: 'solve', prompt, model, apiKey, imageUrl, enableReasoning, reasoningEffort
+    }))).then(results => results
+      .filter(result => result.status === 'fulfilled')
+      .flatMap(result => [this.getItemsList(result.value)]));
+  }
+
+  getCandidateItems(roundResults) {
+    const byNum = new Map();
+    roundResults.flat().forEach(item => {
+      const normalized = this.normalizeCaptureItem(item);
+      if (!normalized) return;
+      const num = normalized.num || 1;
+      if (!byNum.has(num)) byNum.set(num, []);
+      byNum.get(num).push(normalized);
+    });
+    return [...byNum.entries()].map(([num, results]) => ({ num, results }));
+  }
+
+  extractUnanimousItems(roundResults) {
+    return this.getCandidateItems(roundResults)
+      .filter(candidate => candidate.results.length === this.consensusModels.length)
+      .filter(candidate => candidate.results.every(item => this.captureAnswer(item) === this.captureAnswer(candidate.results[0])))
+      .map(candidate => candidate.results[0]);
+  }
+
+  normalizeCaptureItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    const normalized = { ...item, num: Number(item.num) || 1 };
+    if (typeof normalized.answer === 'string') {
+      normalized.answer = normalized.answer.trim().toUpperCase();
+      if (!/^[A-Z]$/.test(normalized.answer)) return null;
+    } else if (normalized.answers && typeof normalized.answers === 'object' && !Array.isArray(normalized.answers)) {
+      const answers = {};
+      for (const [key, value] of Object.entries(normalized.answers)) {
+        if (typeof value !== 'string') return null;
+        const val = value.trim().toLowerCase();
+        if (val === 'đúng' || val === 'true') answers[key.toUpperCase()] = 'Đúng';
+        else if (val === 'sai' || val === 'false') answers[key.toUpperCase()] = 'Sai';
+        else return null;
+      }
+      normalized.answers = answers;
+    } else return null;
+    return normalized;
+  }
+
+  captureAnswer(item) {
+    if (item.answer) return `single:${item.answer}`;
+    return `tf:${Object.keys(item.answers).sort().map(key => `${key}:${item.answers[key]}`).join('|')}`;
   }
 }
 

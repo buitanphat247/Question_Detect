@@ -1,6 +1,6 @@
 class Key4uApiClient {
   constructor(options = {}) {
-    this.defaultApiKey = options.defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5');
+    this.defaultApiKey = options.defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '');
     this.defaultModel = options.defaultModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
     this.backupModels = options.backupModels || (typeof BACKUP_MODELS !== 'undefined' ? BACKUP_MODELS : ['gemini-3.7-flash']);
   }

@@ -73,7 +73,7 @@ const quickCaptureService = new ScreenshotUploadService({
 const captureSolver = new StealthCaptureSolver({
   apiClient: apiClient,
   defaultModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || 'gemini-3.7-flash',
-  consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || 'claude-opus-4-8',
+  consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || 'gemini-3.7-flash',
   defaultApiKey: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.KEY4U_API_KEY) || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : ''),
   contentScriptFiles: CONTENT_SCRIPT_FILES
 });
@@ -106,7 +106,7 @@ function ensureDefaultSettings() {
     if (!res.key4uApiKey) {
       updates.key4uApiKey = cfg.KEY4U_API_KEY || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '');
     }
-    const desiredModel = cfg.DEFAULT_MODEL || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'claude-opus-4-8');
+    const desiredModel = cfg.DEFAULT_MODEL || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
     if (res.key4uModel !== desiredModel) {
       updates.key4uModel = desiredModel;
     }
@@ -257,18 +257,22 @@ if (typeof chrome !== 'undefined') {
       } else if (request.action === (actions.CALL_KEY4U_AI || 'CALL_KEY4U_AI')) {
         hasLocalStudentSession().then(authorized => {
           if (!authorized) return rejectUnauthenticated(sendResponse);
-          return apiClient.solve({
-            task: request.task || 'solve',
-            prompt: request.prompt,
-            model: request.model,
-            apiKey: request.apiKey,
-            imageUrl: request.imageUrl,
-            systemPrompt: request.systemPrompt,
-            enableReasoning: request.enableReasoning,
-            reasoningEffort: request.reasoningEffort
-          })
-            .then(res => sendResponse({ success: true, data: res }))
-            .catch(err => sendResponse({ success: false, error: err.message }));
+          chrome.storage.local.get(['key4uApiKey'], stored => {
+            const apiKey = request.apiKey || stored?.key4uApiKey || '';
+            if (!apiKey) return sendResponse({ success: false, error: 'KEY4U_API_KEY_MISSING' });
+            return apiClient.solve({
+              task: request.task || 'solve',
+              prompt: request.prompt,
+              model: request.model,
+              apiKey,
+              imageUrl: request.imageUrl,
+              systemPrompt: request.systemPrompt,
+              enableReasoning: request.enableReasoning,
+              reasoningEffort: request.reasoningEffort
+            })
+              .then(res => sendResponse({ success: true, data: res }))
+              .catch(err => sendResponse({ success: false, error: err.message }));
+          });
         }).catch(() => rejectUnauthenticated(sendResponse));
         return true;
       } else if (request.action === (actions.TRIGGER_QUICK_CAPTURE_UPLOAD || 'TRIGGER_M_CAPTURE_UPLOAD')) {

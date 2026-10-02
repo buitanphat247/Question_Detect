@@ -1,12 +1,12 @@
 (function registerModelConfig(scope) {
-  const DEFAULT_API_KEY = 'sk-oHL29VmqcUURTnx0qwUeJJ4uoLMu38hQ5CxsTqkcFLUAi2m5';
+  const DEFAULT_API_KEY = '';
   const DEFAULT_MODEL = 'gemini-3.7-flash';
   const CONSENSUS_MODEL = 'gemini-3.7-flash';
   const DETECT_MODEL = 'gemini-3.7-flash';
   const CONSENSUS_MODELS = [
     'gemini-3.7-flash',
     'gemini-2.5-flash',
-    'gemini-3.5-flash-lite'
+    'gemini-2.5-flash-lite'
   ];
   const CONSENSUS_MAX_RETRIES = 2;
 

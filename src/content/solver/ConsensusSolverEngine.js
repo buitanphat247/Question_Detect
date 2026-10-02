@@ -2,11 +2,11 @@ class ConsensusSolverEngine {
   constructor(options = {}) {
     this.primaryModel = options.primaryModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
     this.consensusModel = options.consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.7-flash');
-    this.models = options.models || (typeof CONSENSUS_MODELS !== 'undefined' ? CONSENSUS_MODELS : [
+    this.models = [...new Set(options.models || (typeof CONSENSUS_MODELS !== 'undefined' ? CONSENSUS_MODELS : [
       this.primaryModel,
       'gemini-2.5-flash',
-      'gemini-3.5-flash-lite'
-    ]);
+      'gemini-2.5-flash-lite'
+    ]))].filter(Boolean).slice(0, 3);
     this.maxRetries = Number.isInteger(options.maxRetries)
       ? options.maxRetries
       : (typeof CONSENSUS_MAX_RETRIES !== 'undefined' ? CONSENSUS_MAX_RETRIES : 2);
@@ -57,12 +57,13 @@ QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
 }`;
 
     try {
-      const results = await this.solveRound(prompt, q.image, [], 'solve');
+      const availableKeys = (q.items || []).map(item => String(item.key || '').toUpperCase()).filter(Boolean);
+      const results = await this.solveRound(prompt, q.image, availableKeys, 'solve');
       if (this.isUnanimous(results)) return { ...results[0], consensus: true };
       let latest = results;
       for (let retry = 0; retry < this.maxRetries; retry++) {
         const debatePrompt = this.buildTrueFalseDebatePrompt(q, latest, retry + 1);
-        latest = await this.solveRound(debatePrompt, q.image, [], 'solve');
+        latest = await this.solveRound(debatePrompt, q.image, availableKeys, 'solve');
         if (this.isUnanimous(latest)) return { ...latest[0], consensus: true };
       }
       const strongest = this.selectStrongestResult(latest);
@@ -84,7 +85,7 @@ QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
   parseResult(result, availableKeys) {
     if (result && typeof result === 'object' && (result.answer || result.answers)) {
       if (result.answer) return this.parseSingleChoiceAnswer(result, availableKeys);
-      return result;
+      return this.parseTrueFalseAnswers(result, availableKeys);
     }
     if (typeof result !== 'string') return null;
     try {
@@ -96,8 +97,34 @@ QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
 
   isUnanimous(results) {
     if (results.length !== this.models.length) return false;
-    const answers = results.map(result => JSON.stringify(result.answers || result.answer));
+    const answers = results.map(result => this.canonicalAnswer(result));
     return answers.every(answer => answer === answers[0]);
+  }
+
+  canonicalAnswer(result) {
+    if (!result) return '';
+    if (result.answer) return `single:${String(result.answer).toUpperCase().trim()}`;
+    if (result.answers) {
+      return `tf:${Object.keys(result.answers).sort().map(key => `${key}:${result.answers[key]}`).join('|')}`;
+    }
+    return '';
+  }
+
+  parseTrueFalseAnswers(result, availableKeys = []) {
+    if (!result || !result.answers || typeof result.answers !== 'object' || Array.isArray(result.answers)) return null;
+    const expected = availableKeys.length > 0 ? [...new Set(availableKeys)] : Object.keys(result.answers).map(key => key.toUpperCase());
+    if (expected.length === 0) return null;
+    const answers = {};
+    for (const key of expected) {
+      const raw = result.answers[key] ?? result.answers[key.toLowerCase()];
+      if (typeof raw !== 'string') return null;
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === 'đúng' || normalized === 'true') answers[key] = 'Đúng';
+      else if (normalized === 'sai' || normalized === 'false') answers[key] = 'Sai';
+      else return null;
+    }
+    if (Object.keys(answers).length !== expected.length) return null;
+    return { answers };
   }
 
   selectStrongestResult(results) {
