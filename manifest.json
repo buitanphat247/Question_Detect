@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Language Translate",
-  "version": "2.0.17",
+  "version": "2.0.18",
   "description": "View translations easily as you browse the web. Smart language and text translation assistant.",
   "permissions": [
     "activeTab",
@@ -15,7 +15,7 @@
     "https://*.supabase.co/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/index.js"
   },
   "commands": {
     "solve-single-question": {
@@ -41,7 +41,7 @@
     }
   },
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -56,7 +56,29 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["config.js", "content.js"],
+      "js": [
+        "src/config/runtime-config.js",
+        "src/shared/MessageActions.js",
+        "src/shared/AiPrompts.js",
+        "src/shared/ModelConfig.js",
+        "src/content/core/TextUtils.js",
+        "src/content/core/DomMediaExtractor.js",
+        "src/content/scanner/MoodleScanner.js",
+        "src/content/scanner/QuizCardScanner.js",
+        "src/content/scanner/AnchorBasedScanner.js",
+        "src/content/scanner/GenericDomScanner.js",
+        "src/content/scanner/ExamDomScanner.js",
+        "src/content/clicker/DomAnswerClicker.js",
+        "src/content/solver/ConsensusSolverEngine.js",
+        "src/content/solver/ContinuousSolveRunner.js",
+        "src/content/ui/CaptureStatusNotifier.js",
+        "src/content/ui/StealthToastNotifier.js",
+        "src/content/ui/StealthSnipOverlay.js",
+        "src/content/navigation/MoodleNavigationHandler.js",
+        "src/content/controller/QuickCaptureController.js",
+        "src/content/controller/HotKeyManager.js",
+        "src/content/index.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "match_about_blank": true
