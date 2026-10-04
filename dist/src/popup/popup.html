@@ -32,36 +32,8 @@
       <span class="gt-lang active">Tiếng Việt</span>
     </div>
 
-    <!-- VIEW 1: CHƯA ĐĂNG NHẬP (GIAO DIỆN NHẬP DỊCH/MSV) -->
-    <div id="loginSection" class="gt-section">
-      <div class="gt-input-box">
-        <textarea id="studentIdInput" rows="2" placeholder="Nhập Mã tài khoản / MSV để kích hoạt dịch..." autofocus></textarea>
-      </div>
-
-      <button id="btnLogin" class="gt-btn gt-btn-primary">
-        <span class="btn-text">KÍCH HOẠT DỊCH</span>
-        <span class="gt-spinner hidden" id="loginSpinner"></span>
-      </button>
-
-      <div id="loginMsg" class="gt-msg-box hidden"></div>
-      
-      <div class="gt-hint-text">
-        Nhập MSV của bạn (VD: 25110153) để bắt đầu sử dụng tiện ích dịch.
-      </div>
-    </div>
-
-    <!-- VIEW 2: ĐÃ ĐĂNG NHẬP (GIAO DIỆN DỊCH CHÍNH THỨC) -->
-    <div id="userSection" class="gt-section hidden">
-      <div class="gt-user-card">
-        <div class="gt-user-avatar">
-          <span class="gt-avatar-text">G</span>
-        </div>
-        <div class="gt-user-info">
-          <div class="gt-user-name" id="displayStudentName">Tài khoản Google</div>
-          <div class="gt-user-id">ID: <span id="displayStudentId">---</span> • <span class="gt-text-green">Đã kết nối</span></div>
-        </div>
-      </div>
-
+    <!-- MAIN ACTIONS -->
+    <div class="gt-section">
       <div class="gt-actions-grid">
         <button id="btnContinuous" class="gt-btn gt-btn-primary">
           <span>DỊCH TOÀN BỘ TRANG (Alt + K)</span>
@@ -96,12 +68,11 @@
       <div class="gt-footer-links">
         <a href="https://translate.google.com" target="_blank" class="gt-link">Language Translate</a>
         <span class="gt-sep">•</span>
-        <button id="btnLogout" class="gt-link-btn">Đăng xuất</button>
+        <span class="gt-text-green">Sẵn sàng hoạt động</span>
       </div>
     </div>
   </div>
 
-  <script src="../config/runtime-config.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

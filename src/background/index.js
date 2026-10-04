@@ -131,20 +131,6 @@ function ensureDefaultSettings() {
   });
 }
 
-function hasLocalStudentSession() {
-  return new Promise(resolve => {
-    if (typeof chrome === 'undefined' || !chrome.storage?.local) return resolve(false);
-    chrome.storage.local.get(['studentAuth'], result => {
-      const auth = result?.studentAuth;
-      resolve(Boolean(auth?.studentId && auth?.sessionToken));
-    });
-  });
-}
-
-function rejectUnauthenticated(sendResponse) {
-  sendResponse({ success: false, error: 'AUTH_REQUIRED' });
-}
-
 // Khởi tạo Context Menus
 const contextMenuManager = new ContextMenuManager({
   onTriggerAction: (tab, action) => {
@@ -255,47 +241,35 @@ if (typeof chrome !== 'undefined') {
         sendResponse({ success: true });
         return true;
       } else if (request.action === (actions.CALL_KEY4U_AI || 'CALL_KEY4U_AI')) {
-        hasLocalStudentSession().then(authorized => {
-          if (!authorized) return rejectUnauthenticated(sendResponse);
-          chrome.storage.local.get(['key4uApiKey'], stored => {
-            const apiKey = request.apiKey || stored?.key4uApiKey || '';
-            if (!apiKey) return sendResponse({ success: false, error: 'KEY4U_API_KEY_MISSING' });
-            return apiClient.solve({
-              task: request.task || 'solve',
-              prompt: request.prompt,
-              model: request.model,
-              apiKey,
-              imageUrl: request.imageUrl,
-              systemPrompt: request.systemPrompt,
-              enableReasoning: request.enableReasoning,
-              reasoningEffort: request.reasoningEffort
-            })
-              .then(res => sendResponse({ success: true, data: res }))
-              .catch(err => sendResponse({ success: false, error: err.message }));
-          });
-        }).catch(() => rejectUnauthenticated(sendResponse));
+        chrome.storage.local.get(['key4uApiKey'], stored => {
+          const apiKey = request.apiKey || stored?.key4uApiKey || '';
+          if (!apiKey) return sendResponse({ success: false, error: 'KEY4U_API_KEY_MISSING' });
+          apiClient.solve({
+            task: request.task || 'solve',
+            prompt: request.prompt,
+            model: request.model,
+            apiKey,
+            imageUrl: request.imageUrl,
+            systemPrompt: request.systemPrompt,
+            enableReasoning: request.enableReasoning,
+            reasoningEffort: request.reasoningEffort
+          })
+            .then(res => sendResponse({ success: true, data: res }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        });
         return true;
       } else if (request.action === (actions.TRIGGER_QUICK_CAPTURE_UPLOAD || 'TRIGGER_M_CAPTURE_UPLOAD')) {
-        hasLocalStudentSession().then(authorized => {
-          if (!authorized) return rejectUnauthenticated(sendResponse);
-          return quickCaptureService.captureAndUpload(sender?.tab?.id)
-            .then(result => sendResponse(result))
-            .catch(err => sendResponse({ success: false, error: err.message }));
-        }).catch(() => rejectUnauthenticated(sendResponse));
+        quickCaptureService.captureAndUpload(sender?.tab?.id)
+          .then(result => sendResponse(result))
+          .catch(err => sendResponse({ success: false, error: err.message }));
         return true;
       } else if (request.action === (actions.TRIGGER_CROP_CAPTURE_SOLVE || 'TRIGGER_CROP_CAPTURE_SOLVE')) {
-        hasLocalStudentSession().then(authorized => {
-          if (!authorized) return rejectUnauthenticated(sendResponse);
-          captureSolver.handleCaptureAndSolve(sender?.tab?.id, request.rect);
-          sendResponse({ success: true });
-        }).catch(() => rejectUnauthenticated(sendResponse));
+        captureSolver.handleCaptureAndSolve(sender?.tab?.id, request.rect);
+        sendResponse({ success: true });
         return true;
       } else if (request.action === (actions.TRIGGER_CAPTURE_SOLVE || 'TRIGGER_CAPTURE_SOLVE')) {
-        hasLocalStudentSession().then(authorized => {
-          if (!authorized) return rejectUnauthenticated(sendResponse);
-          captureSolver.handleCaptureAndSolve(sender?.tab?.id, null);
-          sendResponse({ success: true });
-        }).catch(() => rejectUnauthenticated(sendResponse));
+        captureSolver.handleCaptureAndSolve(sender?.tab?.id, null);
+        sendResponse({ success: true });
         return true;
       }
     });
