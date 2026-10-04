@@ -26,7 +26,7 @@ class ContinuousSolveRunner {
   stop() {
     this.isSolvingProcess = false;
     this.setAutoAdvanceEnabled(false);
-    StealthToastNotifier.show('⏹ Đã dừng tiến trình giải.', 'info', 1800);
+    StealthToastNotifier.show('Đã dừng tiến trình giải.', 'info', 1800);
   }
 
   async solveSingle() {
@@ -36,14 +36,14 @@ class ContinuousSolveRunner {
     try {
       const questions = ExamDomScanner.scanAll();
       if (!questions || questions.length === 0) {
-        StealthToastNotifier.show('⚠️ Không tìm thấy câu hỏi nào trên trang.', 'error', 2500);
+        StealthToastNotifier.show('Không tìm thấy câu hỏi nào trên trang.', 'error', 2500);
         this.isSolvingProcess = false;
         return;
       }
 
       // Tìm câu hỏi chưa được làm hoặc câu hỏi đầu tiên
       let targetQ = questions.find(q => !this.isQuestionAnswered(q)) || questions[0];
-      StealthToastNotifier.show(`🤖 Đang giải câu ${targetQ.num}...`, 'info', 2000);
+      StealthToastNotifier.show(`Đang giải câu ${targetQ.num}...`, 'info', 2000);
 
       const cached = await this.getCachedResult(targetQ);
       const result = cached || await this.solverEngine.solveQuestion(targetQ);
@@ -62,7 +62,7 @@ class ContinuousSolveRunner {
               if (inp) DomAnswerClicker.forceClickTarget(inp.tagName === 'INPUT' ? inp : inp.querySelector('input') || inp, inp);
             }
           });
-          StealthToastNotifier.show(`✅ Đã chọn câu ${targetQ.num}`, 'success', 2000);
+          StealthToastNotifier.show(`Đã chọn câu ${targetQ.num}`, 'success', 2000);
         } else if (result.answer) {
           const opt = targetQ.options?.find(o => o.key === result.answer);
           let clicked = false;
@@ -91,13 +91,13 @@ class ContinuousSolveRunner {
             }
           }
 
-          StealthToastNotifier.show(`✅ Câu ${targetQ.num}: Đáp án [${result.answer}]`, 'success', 2200);
+          StealthToastNotifier.show(`Câu ${targetQ.num}: Đáp án [${result.answer}]`, 'success', 2200);
         }
       } else {
-        StealthToastNotifier.show(`❌ Không thể giải câu ${targetQ.num}`, 'error', 2500);
+        StealthToastNotifier.show(`Không thể giải câu ${targetQ.num}`, 'error', 2500);
       }
     } catch (err) {
-      StealthToastNotifier.show('❌ Lỗi khi giải câu hỏi.', 'error', 2500);
+      StealthToastNotifier.show('Lỗi khi giải câu hỏi.', 'error', 2500);
     } finally {
       this.isSolvingProcess = false;
     }
@@ -111,19 +111,19 @@ class ContinuousSolveRunner {
     try {
       const questions = ExamDomScanner.scanAll();
       if (!questions || questions.length === 0) {
-        StealthToastNotifier.show('⚠️ Không tìm thấy câu hỏi để giải tiếp.', 'error', 2500);
+        StealthToastNotifier.show('Không tìm thấy câu hỏi để giải tiếp.', 'error', 2500);
         this.isSolvingProcess = false;
         return;
       }
 
-      StealthToastNotifier.show(`🚀 Bắt đầu tự động giải (${questions.length} câu)...`, 'info', 2500);
+      StealthToastNotifier.show(`Bắt đầu tự động giải (${questions.length} câu)...`, 'info', 2500);
 
       for (let i = 0; i < questions.length; i++) {
         if (!this.isAutoAdvanceEnabled()) break;
         const q = questions[i];
         if (this.isQuestionAnswered(q)) continue;
 
-        StealthToastNotifier.show(`🤖 Đang giải câu ${q.num} (${i + 1}/${questions.length})...`, 'info', 1500);
+        StealthToastNotifier.show(`Đang giải câu ${q.num} (${i + 1}/${questions.length})...`, 'info', 1500);
         const cached = await this.getCachedResult(q);
         const result = cached || await this.solverEngine.solveQuestion(q);
 
@@ -168,11 +168,11 @@ class ContinuousSolveRunner {
       }
 
       if (this.isAutoAdvanceEnabled()) {
-        StealthToastNotifier.show('✅ Đã giải xong toàn bộ câu trang này!', 'success', 2500);
+        StealthToastNotifier.show('Đã giải xong toàn bộ câu trang này!', 'success', 2500);
         this.onAutoAdvance();
       }
     } catch (err) {
-      StealthToastNotifier.show('❌ Lỗi tiến trình tự động giải.', 'error', 2500);
+      StealthToastNotifier.show('Lỗi tiến trình tự động giải.', 'error', 2500);
     } finally {
       this.isSolvingProcess = false;
     }

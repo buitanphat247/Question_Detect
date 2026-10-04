@@ -6,7 +6,7 @@ const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 const srcDir = path.join(rootDir, 'src');
 
-console.log('🚀 Bắt đầu quá trình Build & Obfuscate bảo vệ mã nguồn...');
+console.log('Bắt đầu quá trình Build & Obfuscate bảo vệ mã nguồn...');
 
 // 1. Tạo thư mục dist sạch
 if (fs.existsSync(distDir)) {
@@ -65,21 +65,21 @@ function getAllJsFiles(dir) {
 
 // 4. Obfuscate tất cả các file JavaScript được quét tự động
 const allJsFiles = getAllJsFiles(srcDir);
-console.log(`🔍 Tìm thấy ${allJsFiles.length} file JavaScript trong src/ để mã hóa:`);
+console.log(`Tìm thấy ${allJsFiles.length} file JavaScript trong src/ để mã hóa:`);
 
 for (const fullSrcPath of allJsFiles) {
   const relPath = path.relative(rootDir, fullSrcPath).replace(/\\/g, '/');
   const destPath = path.join(distDir, relPath);
 
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  console.log(`  🔒 [${relPath}]...`);
+  console.log(`  [${relPath}]...`);
   const code = fs.readFileSync(fullSrcPath, 'utf8');
   const obfuscated = JavaScriptObfuscator.obfuscate(code, obfuscatorOptions);
   fs.writeFileSync(destPath, obfuscated.getObfuscatedCode(), 'utf8');
 }
 
 // 5. Sao chép các file tài nguyên tĩnh (manifest.json, popup.html, popup.css, icons)
-console.log('📦 Sao chép tài nguyên tĩnh (manifest.json, popup.html, popup.css, icons)...');
+console.log('Sao chép tài nguyên tĩnh (manifest.json, popup.html, popup.css, icons)...');
 
 fs.copyFileSync(path.join(rootDir, 'manifest.json'), path.join(distDir, 'manifest.json'));
 const popupDestDir = path.join(distDir, 'src', 'popup');
@@ -99,5 +99,5 @@ if (fs.existsSync(iconsSrcDir)) {
   }
 }
 
-console.log('✅ HOÀN THÀNH BUILD & MÃ HÓA!');
-console.log(`📁 Thư mục Extension thành phẩm: ${distDir}`);
+console.log('HOÀN THÀNH BUILD & MÃ HÓA!');
+console.log(`Thư mục Extension thành phẩm: ${distDir}`);

@@ -23,7 +23,7 @@ class StealthSnipOverlay {
     }
 
     this.isActive = true;
-    StealthToastNotifier.show('📸 Đã bật chế độ chụp: Kéo chuột chọn câu hỏi (ESC để hủy)', 'info', 2500);
+    StealthToastNotifier.show('Đã bật chế độ chụp: Kéo chuột chọn câu hỏi (ESC để hủy)', 'info', 2500);
 
     this.overlay = document.createElement('div');
     this.overlay.id = '__qa_stealth_snip_overlay';
@@ -126,7 +126,7 @@ class StealthSnipOverlay {
       };
 
       if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
-        StealthToastNotifier.show('🤖 AI Vision đang giải ảnh đã chụp...', 'info', 3000);
+        StealthToastNotifier.show('AI Vision đang giải ảnh đã chụp...', 'info', 3000);
         const action = globalThis.MessageActions?.TRIGGER_CROP_CAPTURE_SOLVE || 'TRIGGER_CROP_CAPTURE_SOLVE';
         chrome.runtime.sendMessage({
           action: action,

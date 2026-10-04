@@ -33,8 +33,8 @@ if (Test-Path $tempZip) {
 }
 
 Write-Host "`n=======================================================" -ForegroundColor Green
-Write-Host "✅ TAI THANH CONG RA MAN HINH DESKTOP: $finalDir" -ForegroundColor Green
-Write-Host "👉 Mo chrome://extensions -> Bat Developer mode -> Chon Load Unpacked" -ForegroundColor Yellow
+Write-Host "TAI THANH CONG RA MAN HINH DESKTOP: $finalDir" -ForegroundColor Green
+Write-Host "Mo chrome://extensions -> Bat Developer mode -> Chon Load Unpacked" -ForegroundColor Yellow
 Write-Host "=======================================================`n" -ForegroundColor Green
 
 # Tu dong mo thu muc ra tren man hinh

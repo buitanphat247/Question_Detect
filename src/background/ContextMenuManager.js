@@ -8,25 +8,25 @@ class ContextMenuManager {
     chrome.contextMenus.removeAll(() => {
       chrome.contextMenus.create({
         id: 'qa-menu-root',
-        title: '🌐 Language Translate',
+        title: 'Language Translate',
         contexts: ['all']
       });
       chrome.contextMenus.create({
         parentId: 'qa-menu-root',
         id: 'qa-capture-solve',
-        title: '📸 Dịch vùng ảnh chọn (Phím Y)',
+        title: 'Dịch vùng ảnh chọn (Phím Y)',
         contexts: ['all']
       });
       chrome.contextMenus.create({
         parentId: 'qa-menu-root',
         id: 'qa-solve-single',
-        title: '⚡ Dịch đoạn văn bản này (Phím N)',
+        title: 'Dịch đoạn văn bản này (Phím N)',
         contexts: ['all']
       });
       chrome.contextMenus.create({
         parentId: 'qa-menu-root',
         id: 'qa-solve-continuous',
-        title: '🚀 Tự động dịch toàn bộ trang (Alt + K)',
+        title: 'Tự động dịch toàn bộ trang (Alt + K)',
         contexts: ['all']
       });
     });

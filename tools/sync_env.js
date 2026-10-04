@@ -117,7 +117,7 @@ var isSupabaseCacheEnabled = (typeof globalThis !== 'undefined') ? globalThis.is
 `;
 
   fs.writeFileSync(configPath, newConfigContent, 'utf8');
-  console.log('✅ Đã đồng bộ cấu hình từ .env sang src/config/runtime-config.js:');
+  console.log('Đã đồng bộ cấu hình từ .env sang src/config/runtime-config.js:');
   console.log(`   - ENABLE_REASONING: ${enableReasoning} (effort: ${reasoningEffort})`);
   console.log(`   - ENABLE_SUPABASE_CACHE: ${enableSupabase}`);
   console.log(`   - ENABLE_SCREENSHOT_UPLOAD: ${enableScreenshotUpload}`);

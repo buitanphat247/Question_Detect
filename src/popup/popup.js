@@ -127,7 +127,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (student.session_token !== stored.sessionToken) {
         localStorage.removeItem('studentAuth');
         await chrome.storage.local.remove(['studentAuth']);
-        showLoginView('⚠️ Tài khoản này đã kết nối ở thiết bị khác.');
+        showLoginView('Tài khoản này đã kết nối ở thiết bị khác.');
         return;
       }
 
