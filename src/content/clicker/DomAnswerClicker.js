@@ -1,6 +1,46 @@
 class DomAnswerClicker {
+  static MANUAL_REVIEW_MODE = true;
+
+  static markSuggestedAnswer(targetInput, wrapperEl) {
+    if (!targetInput && !wrapperEl) return false;
+
+    const input = (targetInput && targetInput.tagName === 'INPUT')
+      ? targetInput
+      : (wrapperEl?.querySelector?.('input') || targetInput?.querySelector?.('input') || targetInput);
+    const row = wrapperEl || input?.closest?.('.r0, .r1, .form-check, .custom-control, .d-flex, label, tr, li, div') || input?.parentElement || input;
+    const doc = input?.ownerDocument || document;
+    const label = (input?.id ? doc.querySelector(`label[for="${input.id}"]`) : null)
+      || input?.closest?.('label')
+      || row?.querySelector?.('label')
+      || (row?.tagName === 'LABEL' ? row : null)
+      || row;
+
+    if (!label) return false;
+    const markerClass = 'qa-ai-answer-period';
+    if (!label.querySelector(`.${markerClass}`)) {
+      const marker = doc.createElement('span');
+      marker.className = markerClass;
+      marker.textContent = '.';
+      marker.title = 'AI suggested answer — review and select manually';
+      marker.style.cssText = 'color:#000;margin:0;padding:0;font:inherit;';
+      label.appendChild(marker);
+    }
+
+    try {
+      row?.setAttribute('data-qa-ai-suggested', 'true');
+      row?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    } catch (e) {}
+    return true;
+  }
+
   static forceClickTarget(targetInput, wrapperEl) {
     if (!targetInput && !wrapperEl) return false;
+
+    // Manual-review mode: annotate the AI suggestion, never change the page's
+    // checked state or dispatch answer-selection events.
+    if (DomAnswerClicker.MANUAL_REVIEW_MODE) {
+      return DomAnswerClicker.markSuggestedAnswer(targetInput, wrapperEl);
+    }
 
     const input = (targetInput && targetInput.tagName === 'INPUT') 
       ? targetInput 
@@ -303,6 +343,87 @@ class DomAnswerClicker {
       }
     });
   }
+
+  static fillTextInput(targetInput, text) {
+    if (!targetInput) return false;
+    const input = targetInput.tagName === 'INPUT' || targetInput.tagName === 'TEXTAREA'
+      ? targetInput
+      : targetInput.querySelector?.('input[type="text"], input:not([type]), textarea');
+    if (!input) return false;
+
+    try {
+      input.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      input.focus();
+      const valStr = String(text != null ? text : '').trim();
+
+      const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, valStr);
+      } else {
+        input.value = valStr;
+      }
+
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.blur();
+      return true;
+    } catch (e) {
+      input.value = String(text != null ? text : '');
+      return true;
+    }
+  }
+
+  static selectDropdownOption(selectEl, valueOrText) {
+    if (!selectEl) return false;
+    const select = selectEl.tagName === 'SELECT' ? selectEl : selectEl.querySelector?.('select');
+    if (!select) return false;
+
+    try {
+      select.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const targetStr = String(valueOrText || '').trim().toLowerCase();
+      let matchedIndex = -1;
+
+      for (let i = 0; i < select.options.length; i++) {
+        const opt = select.options[i];
+        const optVal = opt.value.trim().toLowerCase();
+        const optTxt = (opt.dataset.qaAiOriginalText || opt.text).trim().toLowerCase();
+        if (optVal === targetStr || optTxt === targetStr) {
+          matchedIndex = i;
+          break;
+        }
+      }
+
+      if (matchedIndex === -1) {
+        for (let i = 0; i < select.options.length; i++) {
+          const opt = select.options[i];
+          const optTxt = (opt.dataset.qaAiOriginalText || opt.text).trim().toLowerCase();
+          if (optTxt && (optTxt.includes(targetStr) || targetStr.includes(optTxt))) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      }
+
+      if (matchedIndex !== -1) {
+        // Keep dropdowns in manual-review mode too: do not change the selected
+        // value. Add one black period directly to the suggested option's text;
+        // it becomes visible when the user opens the native dropdown.
+        const option = select.options[matchedIndex];
+        const originalText = option.dataset.qaAiOriginalText || option.text;
+        option.dataset.qaAiOriginalText = originalText;
+        option.text = `${originalText}.`;
+        option.style.color = '#000';
+        select.setAttribute('data-qa-ai-suggested', 'true');
+        select.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
 }
 
 globalThis.DomAnswerClicker = DomAnswerClicker;

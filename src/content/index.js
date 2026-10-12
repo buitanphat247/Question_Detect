@@ -67,7 +67,18 @@
           sendResponse({ success: false, error: err.message });
         }
       } else if (request.action === (actions.AUTO_SELECT_ANSWER || 'AUTO_SELECT_ANSWER')) {
-        const ok = DomAnswerClicker.autoSelectAnswerOnPage(request.qaId, request.key, request.optionText);
+        let ok = false;
+        if (Array.isArray(request.key)) {
+          request.key.forEach(k => {
+            ok = DomAnswerClicker.autoSelectAnswerOnPage(request.qaId, k, '') || ok;
+          });
+        } else if (typeof request.key === 'string' && request.key.includes(',')) {
+          request.key.split(',').map(s => s.trim()).forEach(k => {
+            ok = DomAnswerClicker.autoSelectAnswerOnPage(request.qaId, k, '') || ok;
+          });
+        } else {
+          ok = DomAnswerClicker.autoSelectAnswerOnPage(request.qaId, request.key, request.optionText);
+        }
         sendResponse({ success: ok });
       } else if (request.action === (actions.TRIGGER_SINGLE_SOLVE || 'TRIGGER_SINGLE_SOLVE')) {
         solveRunner.solveSingle();

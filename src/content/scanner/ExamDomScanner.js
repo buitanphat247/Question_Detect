@@ -59,6 +59,10 @@ class ExamDomScanner {
     valid = ExamDomScanner.filterValidQuestions(questions);
     if (valid.length > 0) return valid;
 
+    questions = ExamDomScanner.scanFormValueControls(scanRoot, passageMap);
+    valid = ExamDomScanner.filterValidQuestions(questions);
+    if (valid.length > 0) return valid;
+
     // Fallback toàn trang nếu scanRoot bị thu hẹp
     if (docRoot && scanRoot !== docRoot) {
       questions = MoodleScanner.scan(docRoot, passageMap);
@@ -76,6 +80,10 @@ class ExamDomScanner {
       questions = GenericDomScanner.scan(docRoot, passageMap);
       valid = ExamDomScanner.filterValidQuestions(questions);
       if (valid.length > 0) return valid;
+
+      questions = ExamDomScanner.scanFormValueControls(docRoot, passageMap);
+      valid = ExamDomScanner.filterValidQuestions(questions);
+      if (valid.length > 0) return valid;
     }
 
     // 5. Ultimate Fallback: Trực tiếp tìm mọi nhóm radio/checkbox trên DOM
@@ -84,6 +92,74 @@ class ExamDomScanner {
     if (valid.length > 0) return valid;
 
     return [];
+  }
+
+  static scanFormValueControls(scanRoot, passageMap = {}) {
+    if (!scanRoot) return [];
+    const controls = Array.from(scanRoot.querySelectorAll('select, textarea, input[type="text"], input:not([type])'))
+      .filter(control => {
+        if (control.disabled || control.readOnly || !TextUtils.isVisible(control)) return false;
+        return !control.closest('header, nav, footer, .search, [role="search"]');
+      });
+    if (controls.length === 0) return [];
+
+    const groups = new Map();
+    controls.forEach(control => {
+      const card = control.closest('.que, .question, [class*="question"], [data-question-id], fieldset, .form-group, tr, li, form > div') || control.parentElement;
+      if (!card) return;
+      if (!groups.has(card)) groups.set(card, []);
+      groups.get(card).push(control);
+    });
+
+    const questions = [];
+    let fallbackNum = 1;
+    groups.forEach((groupControls, card) => {
+      const clone = card.cloneNode(true);
+      clone.querySelectorAll('input, textarea, select, button, label[for]').forEach(el => el.remove());
+      const title = TextUtils.extractRichText(clone);
+      if (!title || title.length < 3) return;
+
+      const numberMatch = title.match(TextUtils.QUESTION_HEADER_REGEX) || card.id?.match(/(?:q|question)[^0-9]*(\d+)/i);
+      const qNum = numberMatch ? Number(numberMatch[1]) : fallbackNum++;
+      const qId = `qa-detected-value-${qNum}`;
+      card.setAttribute('data-qa-id', qId);
+
+      const selects = groupControls.filter(control => control.tagName === 'SELECT');
+      if (selects.length > 0) {
+        questions.push({
+          id: qId,
+          num: qNum,
+          type: 'dropdown_select',
+          title,
+          selects: selects.map((select, index) => ({
+            id: select.name || select.id || `select_${index + 1}`,
+            label: TextUtils.cleanText(select.labels?.[0]?.innerText || select.closest('label, tr, p, div')?.innerText || `Item ${index + 1}`),
+            element: select,
+            options: Array.from(select.options).map(option => ({
+              value: option.value,
+              text: (option.dataset.qaAiOriginalText || option.text || '').trim()
+            })).filter(option => option.text)
+          })),
+          passage: passageMap[qNum] || null,
+          image: DomMediaExtractor.extractImageFromNode(card),
+          element: card
+        });
+        return;
+      }
+
+      questions.push({
+        id: qId,
+        num: qNum,
+        type: 'short_answer',
+        title,
+        input: groupControls[0],
+        inputs: groupControls,
+        passage: passageMap[qNum] || null,
+        image: DomMediaExtractor.extractImageFromNode(card),
+        element: card
+      });
+    });
+    return questions;
   }
 
   static scanDirectInputGroups(scanRoot, passageMap = {}) {
@@ -174,11 +250,14 @@ class ExamDomScanner {
         });
       });
 
+      const isMultiple = group.some(inp => inp.type === 'checkbox') ||
+        /select one or more|chọn một hoặc nhiều|chọn các|chọn những|choose all that apply/i.test(card.innerText || '');
+
       if (options.length >= 2) {
         questions.push({
           id: qId,
           num: qNum,
-          type: 'single_choice',
+          type: isMultiple ? 'multiple_choice' : 'single_choice',
           title: questionText,
           options: options,
           passage: passageMap[qNum] || null,
@@ -197,6 +276,12 @@ class ExamDomScanner {
       if (!q || !q.title) return false;
       if (q.type === 'true_false_group') {
         return Array.isArray(q.items) && q.items.length > 0;
+      }
+      if (q.type === 'short_answer') {
+        return !!(q.input || (Array.isArray(q.inputs) && q.inputs.length > 0));
+      }
+      if (q.type === 'dropdown_select') {
+        return Array.isArray(q.selects) && q.selects.length > 0;
       }
       return Array.isArray(q.options) && q.options.length >= 2;
     });

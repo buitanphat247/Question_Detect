@@ -83,11 +83,14 @@ class AnchorBasedScanner {
         });
       });
 
+      const isMultiple = group.some(inp => inp.type === 'checkbox') ||
+        /select one or more|chọn một hoặc nhiều|chọn các|chọn những/i.test(qCard?.innerText || '');
+
       if (options.length >= 2) {
         questions.push({
           id: qId,
           num: qNum,
-          type: 'single_choice',
+          type: isMultiple ? 'multiple_choice' : 'single_choice',
           title: questionText || `Câu hỏi ${qNum}`,
           options: options,
           passage: passageMap[qNum] || null,

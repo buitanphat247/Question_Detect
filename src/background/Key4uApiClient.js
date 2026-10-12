@@ -144,22 +144,12 @@ class Key4uApiClient {
 
     const data = await res.json();
     const messageObj = data.choices?.[0]?.message;
-    let content = messageObj?.content || '';
-    if (!content && messageObj?.reasoning_content) {
-      content = messageObj.reasoning_content;
-    }
-
-    if (isSingleSolve) {
-      const parsedSingle = this.extractJsonFromText(content, false);
-      if (!parsedSingle || typeof parsedSingle.answer !== 'string') {
-        throw new Error('AI không trả về JSON đáp án hợp lệ.');
-      }
-      return { answer: parsedSingle.answer.trim(), raw: content };
-    }
-
-    const parsed = this.extractJsonFromText(content, isExtractTask);
+    // Reasoning is never an answer payload. Only the final content is allowed
+    // to reach parsers, dropdown markers, or input fields.
+    const content = messageObj?.content || '';
 
     if (isExtractTask) {
+      const parsed = this.extractJsonFromText(content, true);
       if (Array.isArray(parsed)) {
         return { questions: parsed, rawContent: content };
       }
@@ -169,20 +159,89 @@ class Key4uApiClient {
       return { questions: [], rawContent: content, error: 'Không phân tích được danh sách câu hỏi.' };
     }
 
-    const finalResult = parsed;
-
-    if (!finalResult) {
-      throw new Error('AI không trả về kết quả hợp lệ.');
+    const flexibleResult = this.parseFlexibleResponse(content);
+    if (flexibleResult) {
+      return { ...flexibleResult, raw: content };
     }
 
-    if (Array.isArray(finalResult)) {
-      return { questions: finalResult, rawContent: content };
+    // Reject non-contract output instead of treating an explanation as an
+    // answer that could be inserted into a text field.
+    return { raw: content };
+  }
+
+  parseFlexibleResponse(text) {
+    if (typeof text !== 'string') return null;
+    let cleaned = text.trim();
+
+    // Bỏ code fences
+    const fenceMatch = cleaned.match(/^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```$/i);
+    if (fenceMatch) cleaned = fenceMatch[1].trim();
+
+    // 1. Chữ cái đơn giản: A, B, C, D (hoặc "C", "C.", "Đáp án: C")
+    const singleMatch = cleaned.match(/^(?:đáp án[:\s]*|answer[:\s]*)?["'\(\\[]?\s*([A-Za-z0-9])\s*["'\)\\]]?\.?$/i);
+    if (singleMatch) {
+      return { answer: singleMatch[1].toUpperCase() };
     }
 
-    if (finalResult.answer) {
-      finalResult.answer = finalResult.answer.toUpperCase().trim();
+    // 2. Thử parse JSON
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed)) {
+        const cleanArr = parsed.map(k => String(k).trim().toUpperCase()).filter(Boolean);
+        return { answers: cleanArr };
+      }
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.answer) {
+          if (Array.isArray(parsed.answer)) return { answers: parsed.answer.map(k => String(k).trim().toUpperCase()) };
+          return { answer: String(parsed.answer).trim().toUpperCase(), reason: parsed.reason };
+        }
+        if (parsed.answers) {
+          return { answers: parsed.answers, reason: parsed.reason };
+        }
+        return { answers: parsed, reason: parsed.reason };
+      }
+      if (typeof parsed === 'string' && /^[A-Za-z0-9]$/.test(parsed.trim())) {
+        return { answer: parsed.trim().toUpperCase() };
+      }
+    } catch (e) {}
+
+    // 3. Mảng JSON trong chuỗi: ["A", "C"]
+    const arrayMatch = cleaned.match(/\[\s*(?:["'][A-Za-z0-9]+["']\s*,?\s*)+\]/);
+    if (arrayMatch) {
+      try {
+        const arr = JSON.parse(arrayMatch[0]);
+        if (Array.isArray(arr) && arr.length > 0) {
+          return { answers: arr.map(k => String(k).trim().toUpperCase()) };
+        }
+      } catch (e) {}
     }
-    return finalResult;
+
+    // 4. Chuỗi phân tách phẩy: "A, C" hoặc "A, B, D"
+    if (/^[A-Za-z0-9](?:\s*,\s*[A-Za-z0-9])+$/i.test(cleaned)) {
+      const parts = cleaned.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      return { answers: parts };
+    }
+
+    // 5. JSON Object {...}
+    const objMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      try {
+        const obj = JSON.parse(objMatch[0]);
+        if (obj.answer) {
+          if (Array.isArray(obj.answer)) return { answers: obj.answer.map(k => String(k).trim().toUpperCase()) };
+          return { answer: String(obj.answer).trim().toUpperCase(), reason: obj.reason };
+        }
+        if (obj.answers) return { answers: obj.answers, reason: obj.reason };
+        return { answers: obj, reason: obj.reason };
+      } catch (e) {}
+    }
+
+    // 6. Điền văn bản ngắn (Short Answer): ví dụ FE67, 104, AND EAX, FFFFF000
+    if (cleaned.length < 80 && !cleaned.includes('\n')) {
+      return { answerText: cleaned, answer: cleaned };
+    }
+
+    return null;
   }
 
   async fetchCompletion(payload, timeoutMs, key) {
@@ -193,7 +252,7 @@ class Key4uApiClient {
         method: 'POST',
         signal: controller.signal,
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json; charset=utf-8',
           'Authorization': `Bearer ${key}`
         },
         body: JSON.stringify(payload)
@@ -201,6 +260,13 @@ class Key4uApiClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  extractCompactAnswer(text) {
+    const res = this.parseFlexibleResponse(text);
+    if (res?.answer) return res.answer;
+    if (Array.isArray(res?.answers)) return res.answers;
+    return null;
   }
 
   extractJsonFromText(text, isExtractTask) {
@@ -217,7 +283,10 @@ class Key4uApiClient {
     }
 
     try { return JSON.parse(cleaned); } catch (e) {}
-
+    const objMatch = cleaned.match(/\{[\s\S]*\}|(?:\[[\s\S]*\])/);
+    if (objMatch) {
+      try { return JSON.parse(objMatch[0]); } catch (e) {}
+    }
     return null;
   }
 }

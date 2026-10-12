@@ -15,17 +15,40 @@ class ConsensusSolverEngine {
 
   async solveQuestion(q) {
     if (!q) return null;
-    const isTF = q.type === 'true_false_group';
-
-    if (isTF) {
+    if (q.type === 'true_false_group') {
       return this.solveTrueFalseQuestion(q);
+    }
+    if (q.type === 'multiple_choice') {
+      return this.solveMultipleChoiceQuestion(q);
+    }
+    if (q.type === 'short_answer') {
+      return this.solveShortAnswerQuestion(q);
+    }
+    if (q.type === 'dropdown_select') {
+      return this.solveDropdownQuestion(q);
     }
     return this.solveSingleChoiceQuestion(q);
   }
 
+  async solveMultipleChoiceQuestion(q) {
+    const prompt = this.buildMultipleChoicePrompt(q);
+    const availableKeys = (q.options || []).map(o => String(o.key || '').toUpperCase());
+    let results = await this.solveRound(prompt, q.image, availableKeys, 'solve');
+    if (this.isUnanimous(results)) return { ...results[0], consensus: true };
+
+    for (let retry = 0; retry < this.maxRetries; retry++) {
+      const debatePrompt = this.buildMultipleChoiceDebatePrompt(q, results, retry + 1);
+      results = await this.solveRound(debatePrompt, q.image, availableKeys, 'solve');
+      if (this.isUnanimous(results)) return { ...results[0], consensus: true };
+    }
+
+    const strongest = this.selectStrongestResult(results);
+    return strongest ? { ...strongest, consensus: false, consensusStatus: 'unresolved' } : null;
+  }
+
   async solveSingleChoiceQuestion(q) {
     const prompt = this.buildSingleChoicePrompt(q);
-    const availableKeys = q.options.map(o => o.key);
+    const availableKeys = (q.options || []).map(o => o.key);
     let results = await this.solveRound(prompt, q.image, availableKeys);
     if (this.isUnanimous(results)) return { ...results[0], consensus: true };
 
@@ -39,12 +62,29 @@ class ConsensusSolverEngine {
     return strongest ? { ...strongest, consensus: false, consensusStatus: 'unresolved' } : null;
   }
 
+  async solveShortAnswerQuestion(q) {
+    const prompt = this.buildShortAnswerPrompt(q);
+    const results = await this.solveRound(prompt, q.image, [], 'solve');
+    if (!this.isUnanimous(results)) return null;
+    const textVal = results[0]?.answerText || results[0]?.answer || '';
+    return textVal ? { answerText: textVal, answer: textVal, consensus: true } : null;
+  }
+
+  async solveDropdownQuestion(q) {
+    const prompt = this.buildDropdownPrompt(q);
+    const results = (await this.solveRound(prompt, q.image, [], 'solve'))
+      .map(result => result?.dropdownAnswers ? result : { dropdownAnswers: result?.answers || {} })
+      .filter(result => Object.keys(result.dropdownAnswers).length > 0);
+    if (!this.isUnanimous(results)) return null;
+    return { dropdownAnswers: results[0].dropdownAnswers, consensus: true };
+  }
+
   async solveTrueFalseQuestion(q) {
     const prompt = `Bạn là chuyên gia giải đề trắc nghiệm Đúng / Sai.
 ĐỀ BÀI: ${q.title}
 ${q.passage ? `BÀI ĐỌC: ${q.passage}\n` : ''}
 CÁC Ý CẦN ĐÁNH GIÁ:
-${q.items.map(it => `${it.key}. ${it.text}`).join('\n')}
+${(q.items || []).map(it => `${it.key}. ${it.text}`).join('\n')}
 
 QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
 {
@@ -82,17 +122,55 @@ QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
       .filter(Boolean);
   }
 
-  parseResult(result, availableKeys) {
-    if (result && typeof result === 'object' && (result.answer || result.answers)) {
+  parseResult(result, availableKeys = []) {
+    if (!result) return null;
+
+    if (typeof result === 'object') {
+      if (result.dropdownAnswers) return { dropdownAnswers: result.dropdownAnswers };
+      if (result.answerText) return { answerText: result.answerText, answer: result.answerText };
+
+      if (Array.isArray(result.answers)) return this.parseMultipleChoiceAnswers(result, availableKeys);
+      if (Array.isArray(result.answer)) return this.parseMultipleChoiceAnswers({ answers: result.answer }, availableKeys);
+      if (typeof result.answer === 'string' && result.answer.includes(',')) {
+        return this.parseMultipleChoiceAnswers({ answers: result.answer.split(',') }, availableKeys);
+      }
       if (result.answer) return this.parseSingleChoiceAnswer(result, availableKeys);
-      return this.parseTrueFalseAnswers(result, availableKeys);
+      if (result.answers && typeof result.answers === 'object') return this.parseTrueFalseAnswers(result, availableKeys);
     }
-    if (typeof result !== 'string') return null;
-    try {
-      return this.parseResult(JSON.parse(result.trim()), availableKeys);
-    } catch (e) {
-      return null;
+
+    if (typeof result === 'string') {
+      const trimmed = result.trim();
+      // Chữ cái đơn
+      if (/^[A-Za-z0-9]$/.test(trimmed)) {
+        return this.parseSingleChoiceAnswer({ answer: trimmed.toUpperCase() }, availableKeys);
+      }
+      // Mảng
+      try {
+        const parsed = JSON.parse(trimmed);
+        return this.parseResult(parsed, availableKeys);
+      } catch (e) {}
+
+      // Regex mảng
+      const arrMatch = trimmed.match(/\[\s*(?:["'][A-Za-z0-9]+["']\s*,?\s*)+\]/);
+      if (arrMatch) {
+        try { return this.parseResult(JSON.parse(arrMatch[0]), availableKeys); } catch (err) {}
+      }
+
+      // Short answer
+      return { answerText: trimmed, answer: trimmed };
     }
+
+    return null;
+  }
+
+  parseMultipleChoiceAnswers(result, availableKeys = []) {
+    if (!result || !result.answers) return null;
+    const rawList = Array.isArray(result.answers) ? result.answers : [result.answers];
+    const cleanAnswers = rawList
+      .map(k => String(k).trim().toUpperCase().replace(/[^A-Z0-9]/g, ''))
+      .filter(k => k && (availableKeys.length === 0 || availableKeys.includes(k)));
+    if (cleanAnswers.length === 0) return null;
+    return { answers: [...new Set(cleanAnswers)], reason: result.reason || '' };
   }
 
   isUnanimous(results) {
@@ -103,44 +181,48 @@ QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
 
   canonicalAnswer(result) {
     if (!result) return '';
+    if (result.dropdownAnswers) {
+      return `dropdown:${Object.keys(result.dropdownAnswers).sort().map(key => `${key}:${result.dropdownAnswers[key]}`).join('|')}`;
+    }
     if (result.answer) return `single:${String(result.answer).toUpperCase().trim()}`;
     if (result.answers) {
+      if (Array.isArray(result.answers)) {
+        return `multi:${[...result.answers].map(k => String(k).trim().toUpperCase()).sort().join(',')}`;
+      }
       return `tf:${Object.keys(result.answers).sort().map(key => `${key}:${result.answers[key]}`).join('|')}`;
     }
+    if (result.answerText) return `text:${result.answerText}`;
     return '';
   }
 
   parseTrueFalseAnswers(result, availableKeys = []) {
     if (!result || !result.answers || typeof result.answers !== 'object' || Array.isArray(result.answers)) return null;
     const expected = availableKeys.length > 0 ? [...new Set(availableKeys)] : Object.keys(result.answers).map(key => key.toUpperCase());
-    if (expected.length === 0) return null;
+    if (expected.length === 0) return { answers: result.answers };
     const answers = {};
     for (const key of expected) {
       const raw = result.answers[key] ?? result.answers[key.toLowerCase()];
-      if (typeof raw !== 'string') return null;
+      if (typeof raw !== 'string') continue;
       const normalized = raw.trim().toLowerCase();
       if (normalized === 'đúng' || normalized === 'true') answers[key] = 'Đúng';
       else if (normalized === 'sai' || normalized === 'false') answers[key] = 'Sai';
-      else return null;
     }
-    if (Object.keys(answers).length !== expected.length) return null;
-    return { answers };
+    return Object.keys(answers).length > 0 ? { answers } : { answers: result.answers };
   }
 
   selectStrongestResult(results) {
     return results
-      .filter(result => result && (result.answer || result.answers))
+      .filter(result => result && (result.answer || result.answers || result.answerText || result.dropdownAnswers))
       .sort((a, b) => String(b.reason || '').length - String(a.reason || '').length)[0] || null;
   }
 
   buildDebatePrompt(q, results, round) {
     return `${this.buildSingleChoicePrompt(q)}
 
-DEBATE ROUND ${round}: Các kết quả độc lập bên dưới chỉ là dữ liệu để kiểm tra, không phải đáp án đúng:
+DEBATE ROUND ${round}: Các kết quả độc lập trước đó:
 ${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
 
-Hãy giải lại từ đầu, đối chiếu mọi phương án, tìm nguyên nhân bất đồng và sửa đáp án nếu cần. Không giữ đáp án cũ chỉ vì đó là đáp án ban đầu.
-Trả về duy nhất JSON: {"answer":"X","reason":"short verification"}`;
+Hãy đối chiếu kỹ lưỡng và CHỈ trả về DUY NHẤT một chữ cái đáp án đúng. Tuyệt đối không giải thích.`;
   }
 
   buildTrueFalseDebatePrompt(q, results, round) {
@@ -156,21 +238,70 @@ Trả về duy nhất JSON theo schema answers, không thêm văn bản.`;
 ĐỀ BÀI: ${q.title}
 ${q.passage ? `BÀI ĐỌC: ${q.passage}\n` : ''}
 CÁC Ý CẦN ĐÁNH GIÁ:
-${q.items.map(it => `${it.key}. ${it.text}`).join('\n')}
+${(q.items || []).map(it => `${it.key}. ${it.text}`).join('\n')}
 
 Trả về duy nhất JSON: {"answers":{"A":"Đúng","B":"Sai","C":"Đúng","D":"Sai"}}`;
   }
 
   buildSingleChoicePrompt(q) {
-    return `Bạn là chuyên gia giải trắc nghiệm siêu chuẩn xác.
-ĐỀ BÀI: ${q.title}
-${q.passage ? `BÀI ĐỌC HIỂU: ${q.passage}\n` : ''}
-CÁC PHƯƠNG ÁN:
-${q.options.map(o => `${o.key}. ${o.text}`).join('\n')}
+    return `You are a high-precision multiple-choice solver.
+QUESTION: ${q.title}
+${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
+OPTIONS:
+${(q.options || []).map(o => `${o.key}. ${o.text}`).join('\n')}
 
-AVAILABLE_OPTIONS: [${q.options.map(o => `"${o.key}"`).join(', ')}]
+ALLOWED_KEYS: [${(q.options || []).map(o => `"${o.key}"`).join(',')}]
+Solve internally. Return exactly one allowed uppercase key and nothing else.
+Valid output example: A`;
+  }
 
-QUY TẮC: Suy luận ngầm và chỉ trả về DUY NHẤT một khối JSON: {"answer": "X"}`;
+  buildMultipleChoicePrompt(q) {
+    return `You are a high-precision multiple-answer solver.
+QUESTION: ${q.title}
+${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
+OPTIONS:
+${(q.options || []).map(o => `${o.key}. ${o.text}`).join('\n')}
+
+ALLOWED_KEYS: [${(q.options || []).map(o => `"${o.key}"`).join(',')}]
+Select every correct option and solve internally.
+STRICT OUTPUT: return exactly one minified JSON array of allowed uppercase keys, on one line, with no whitespace, Markdown, code fence, explanation, or trailing newline.
+Valid output example: ["A","C"]`;
+  }
+
+  buildMultipleChoiceDebatePrompt(q, results, round) {
+    return `${this.buildMultipleChoicePrompt(q)}
+
+DEBATE ROUND ${round}: Các kết quả độc lập trước đó:
+${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
+
+Re-solve from scratch, compare every option, then return ONLY a JSON array of answer letters (e.g. ["A", "C"]).`;
+  }
+
+  buildShortAnswerPrompt(q) {
+    return `You are a precise computer-architecture and assembly-language solver.
+QUESTION: ${q.title}
+${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
+
+This is a fill-in-the-blank answer. Solve internally, then return exactly the value or instruction that must be entered in the input field.
+STRICT OUTPUT: one plain-text line only; no JSON, Markdown, code fence, label, explanation, quotation marks, or leading/trailing whitespace.
+Examples: FE67 | 104 | and EAX,FFFFF000`;
+  }
+
+  buildDropdownPrompt(q) {
+    const list = (q.selects || []).map(s => {
+      const optTexts = (s.options || []).map(o => o.text).filter(t => t && t !== 'Choose...');
+      return `- ${s.label || s.id}: [${optTexts.join(', ')}]`;
+    }).join('\n');
+
+    return `You are a precise computer-architecture and assembly-language solver for matching dropdowns.
+QUESTION: ${q.title}
+${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
+DROPDOWNS AND ALLOWED VALUES:
+${list}
+
+Solve internally. Return exactly one minified JSON object on one ASCII line, with no Markdown, code fence, explanation, or extra keys.
+Use each dropdown label exactly as supplied and an allowed option text exactly as supplied.
+Exact shape: {"answers":{"CX":"FE67","BX":"67FE"}}`;
   }
 
   async sendSolveRequest(prompt, model, imageUrl, task = 'solve') {
@@ -203,13 +334,15 @@ QUY TẮC: Suy luận ngầm và chỉ trả về DUY NHẤT một khối JSON: 
     let key = '';
 
     if (typeof res === 'object' && res.answer) {
-      key = res.answer.toUpperCase().trim();
+      key = String(res.answer).toUpperCase().trim();
     } else if (typeof res === 'string') {
       const trimmed = res.trim();
       try {
         const parsed = JSON.parse(trimmed);
         if (parsed && typeof parsed.answer === 'string') key = parsed.answer.toUpperCase().trim();
-      } catch (e) {}
+      } catch (e) {
+        if (/^[A-Za-z0-9]$/.test(trimmed)) key = trimmed.toUpperCase();
+      }
     }
 
     if (key && (availableKeys.length === 0 || availableKeys.includes(key))) {
@@ -218,6 +351,10 @@ QUY TẮC: Suy luận ngầm và chỉ trả về DUY NHẤT một khối JSON: 
         result.reason = res.reason;
       }
       return result;
+    }
+
+    if (key) {
+      return { answer: key };
     }
     return null;
   }

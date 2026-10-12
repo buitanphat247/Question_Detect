@@ -32,6 +32,20 @@
       <span class="gt-lang active">Tiếng Việt</span>
     </div>
 
+    <!-- API KEY CONFIGURATION -->
+    <div class="gt-card-config">
+      <div class="gt-config-header">
+        <span class="gt-config-title">🔑 Khóa API Key (Key4u / AI)</span>
+        <span id="keyStatusBadge" class="gt-badge-warn">Chưa có Key</span>
+      </div>
+      <div class="gt-input-row">
+        <input type="password" id="inputApiKey" placeholder="Dán API Key (sk-...) vào đây" class="gt-input" spellcheck="false" autocomplete="off">
+        <button type="button" id="btnToggleKey" class="gt-btn-icon" title="Hiện/Ẩn Key">👁️</button>
+        <button type="button" id="btnSaveKey" class="gt-btn-save">Lưu</button>
+      </div>
+      <div id="keyNotice" class="gt-notice">Nhập Key để kích hoạt phím N và Alt + K.</div>
+    </div>
+
     <!-- MAIN ACTIONS -->
     <div class="gt-section">
       <div class="gt-actions-grid">

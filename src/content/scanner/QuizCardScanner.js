@@ -108,11 +108,14 @@ class QuizCardScanner {
           });
         });
 
+        const isMultiple = Array.from(card.querySelectorAll('input[type="checkbox"]')).length > 0 ||
+          /select one or more|chọn một hoặc nhiều|chọn các|chọn những|choose all that apply/i.test(card.innerText || '');
+
         if (questionText && options.length >= 2) {
           questions.push({
             id: qId,
             num: qNum,
-            type: 'single_choice',
+            type: isMultiple ? 'multiple_choice' : 'single_choice',
             title: questionText,
             options: options,
             passage: passageMap[qNum] || null,
