@@ -1,6 +1,17 @@
 class DomAnswerClicker {
   static MANUAL_REVIEW_MODE = true;
 
+  static clearSuggestedMarkers(container) {
+    if (!container?.querySelectorAll) return;
+    container.querySelectorAll('.qa-ai-answer-period').forEach(marker => marker.remove());
+    container.querySelectorAll('[data-qa-ai-suggested]').forEach(element => element.removeAttribute('data-qa-ai-suggested'));
+    container.querySelectorAll('option[data-qa-ai-original-text]').forEach(option => {
+      option.text = option.dataset.qaAiOriginalText;
+      option.style.removeProperty('color');
+      delete option.dataset.qaAiOriginalText;
+    });
+  }
+
   static markSuggestedAnswer(targetInput, wrapperEl) {
     if (!targetInput && !wrapperEl) return false;
 

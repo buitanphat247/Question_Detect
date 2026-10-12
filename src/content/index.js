@@ -20,6 +20,9 @@
   const solverEngine = new ConsensusSolverEngine({
     primaryModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.DEFAULT_MODEL) || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash'),
     consensusModel: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.CONSENSUS_MODEL) || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.7-flash'),
+    models: (typeof APP_CONFIG !== 'undefined' && Array.isArray(APP_CONFIG.CONSENSUS_MODELS) && APP_CONFIG.CONSENSUS_MODELS.length === 3)
+      ? APP_CONFIG.CONSENSUS_MODELS
+      : (typeof CONSENSUS_MODELS !== 'undefined' ? CONSENSUS_MODELS : undefined),
     defaultApiKey: (typeof APP_CONFIG !== 'undefined' && APP_CONFIG.KEY4U_API_KEY) || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '')
   });
 

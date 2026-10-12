@@ -1,7 +1,8 @@
 {
   "scripts": {
     "sync:config": "node tools/sync_env.js",
-    "build": "node tools/build_dist.js"
+    "build": "node tools/build_dist.js",
+    "test": "node tests/production-hardening.test.js"
   },
   "devDependencies": {
     "javascript-obfuscator": "^5.8.1"

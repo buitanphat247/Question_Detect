@@ -1,367 +1,276 @@
 class ConsensusSolverEngine {
   constructor(options = {}) {
     this.primaryModel = options.primaryModel || (typeof DEFAULT_MODEL !== 'undefined' ? DEFAULT_MODEL : 'gemini-3.7-flash');
-    this.consensusModel = options.consensusModel || (typeof CONSENSUS_MODEL !== 'undefined' ? CONSENSUS_MODEL : 'gemini-3.7-flash');
     this.models = [...new Set(options.models || (typeof CONSENSUS_MODELS !== 'undefined' ? CONSENSUS_MODELS : [
-      this.primaryModel,
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite'
+      this.primaryModel, 'gemini-2.5-flash', 'gemini-2.5-flash-lite'
     ]))].filter(Boolean).slice(0, 3);
     this.maxRetries = Number.isInteger(options.maxRetries)
-      ? options.maxRetries
+      ? Math.max(0, options.maxRetries)
       : (typeof CONSENSUS_MAX_RETRIES !== 'undefined' ? CONSENSUS_MAX_RETRIES : 2);
+    this.roundTimeoutMs = options.roundTimeoutMs || (typeof CONSENSUS_ROUND_TIMEOUT_MS !== 'undefined' ? CONSENSUS_ROUND_TIMEOUT_MS : 90000);
     this.defaultApiKey = options.defaultApiKey || (typeof DEFAULT_API_KEY !== 'undefined' ? DEFAULT_API_KEY : '');
   }
 
-  async solveQuestion(q) {
-    if (!q) return null;
-    if (q.type === 'true_false_group') {
-      return this.solveTrueFalseQuestion(q);
+  async solveQuestion(question) {
+    if (!question || this.models.length !== 3) {
+      return this.failure('CONFIGURATION_ERROR');
     }
-    if (q.type === 'multiple_choice') {
-      return this.solveMultipleChoiceQuestion(q);
-    }
-    if (q.type === 'short_answer') {
-      return this.solveShortAnswerQuestion(q);
-    }
-    if (q.type === 'dropdown_select') {
-      return this.solveDropdownQuestion(q);
-    }
-    return this.solveSingleChoiceQuestion(q);
+    const prompt = this.buildPrompt(question);
+    if (!prompt) return this.failure('UNSUPPORTED_QUESTION_TYPE');
+    return this.resolveConsensus(question, prompt);
   }
 
-  async solveMultipleChoiceQuestion(q) {
-    const prompt = this.buildMultipleChoicePrompt(q);
-    const availableKeys = (q.options || []).map(o => String(o.key || '').toUpperCase());
-    let results = await this.solveRound(prompt, q.image, availableKeys, 'solve');
-    if (this.isUnanimous(results)) return { ...results[0], consensus: true };
+  async resolveConsensus(question, initialPrompt) {
+    let round = await this.solveRound(question, initialPrompt);
+    const history = [round];
+    if (this.isUnanimous(round.results)) return this.success(round.results[0]);
 
-    for (let retry = 0; retry < this.maxRetries; retry++) {
-      const debatePrompt = this.buildMultipleChoiceDebatePrompt(q, results, retry + 1);
-      results = await this.solveRound(debatePrompt, q.image, availableKeys, 'solve');
-      if (this.isUnanimous(results)) return { ...results[0], consensus: true };
+    for (let attempt = 1; attempt <= this.maxRetries && this.shouldRetry(round); attempt++) {
+      const retryPrompt = this.buildDebatePrompt(question, round.results, attempt);
+      round = await this.solveRound(question, retryPrompt);
+      history.push(round);
+      if (this.isUnanimous(round.results)) return this.success(round.results[0]);
     }
 
-    const strongest = this.selectStrongestResult(results);
-    return strongest ? { ...strongest, consensus: false, consensusStatus: 'unresolved' } : null;
+    return this.failure(this.deriveFailureStatus(round, history), round, history);
   }
 
-  async solveSingleChoiceQuestion(q) {
-    const prompt = this.buildSingleChoicePrompt(q);
-    const availableKeys = (q.options || []).map(o => o.key);
-    let results = await this.solveRound(prompt, q.image, availableKeys);
-    if (this.isUnanimous(results)) return { ...results[0], consensus: true };
-
-    for (let retry = 0; retry < this.maxRetries; retry++) {
-      const debatePrompt = this.buildDebatePrompt(q, results, retry + 1);
-      results = await this.solveRound(debatePrompt, q.image, availableKeys);
-      if (this.isUnanimous(results)) return { ...results[0], consensus: true };
-    }
-
-    const strongest = this.selectStrongestResult(results);
-    return strongest ? { ...strongest, consensus: false, consensusStatus: 'unresolved' } : null;
+  success(answer) {
+    return { ...answer, consensus: true, consensusStatus: 'CONSENSUS' };
   }
 
-  async solveShortAnswerQuestion(q) {
-    const prompt = this.buildShortAnswerPrompt(q);
-    const results = await this.solveRound(prompt, q.image, [], 'solve');
-    if (!this.isUnanimous(results)) return null;
-    const textVal = results[0]?.answerText || results[0]?.answer || '';
-    return textVal ? { answerText: textVal, answer: textVal, consensus: true } : null;
+  failure(status, round = null, history = []) {
+    return {
+      consensus: false,
+      consensusStatus: status,
+      diagnostics: round ? round.statuses.map(({ model, kind }) => ({ model, kind })) : [],
+      retryCount: Math.max(0, history.length - 1)
+    };
   }
 
-  async solveDropdownQuestion(q) {
-    const prompt = this.buildDropdownPrompt(q);
-    const results = (await this.solveRound(prompt, q.image, [], 'solve'))
-      .map(result => result?.dropdownAnswers ? result : { dropdownAnswers: result?.answers || {} })
-      .filter(result => Object.keys(result.dropdownAnswers).length > 0);
-    if (!this.isUnanimous(results)) return null;
-    return { dropdownAnswers: results[0].dropdownAnswers, consensus: true };
+  shouldRetry(round) {
+    // Do not burn API quota when every response was malformed. Network/API failures
+    // and genuine disagreement can improve on a bounded re-run.
+    if (!round || round.statuses.length === 0) return false;
+    return round.statuses.some(status => status.kind === 'valid' || status.kind === 'model_error' || status.kind === 'timeout');
   }
 
-  async solveTrueFalseQuestion(q) {
-    const prompt = `Bạn là chuyên gia giải đề trắc nghiệm Đúng / Sai.
-ĐỀ BÀI: ${q.title}
-${q.passage ? `BÀI ĐỌC: ${q.passage}\n` : ''}
-CÁC Ý CẦN ĐÁNH GIÁ:
-${(q.items || []).map(it => `${it.key}. ${it.text}`).join('\n')}
-
-QUY TẮC: Trả về DUY NHẤT một khối JSON theo mẫu:
-{
-  "answers": {
-    "A": "Đúng",
-    "B": "Sai",
-    "C": "Đúng",
-    "D": "Sai"
-  }
-}`;
-
-    try {
-      const availableKeys = (q.items || []).map(item => String(item.key || '').toUpperCase()).filter(Boolean);
-      const results = await this.solveRound(prompt, q.image, availableKeys, 'solve');
-      if (this.isUnanimous(results)) return { ...results[0], consensus: true };
-      let latest = results;
-      for (let retry = 0; retry < this.maxRetries; retry++) {
-        const debatePrompt = this.buildTrueFalseDebatePrompt(q, latest, retry + 1);
-        latest = await this.solveRound(debatePrompt, q.image, availableKeys, 'solve');
-        if (this.isUnanimous(latest)) return { ...latest[0], consensus: true };
-      }
-      const strongest = this.selectStrongestResult(latest);
-      if (strongest) return { ...strongest, consensus: false, consensusStatus: 'unresolved' };
-    } catch (e) {}
-    return null;
+  deriveFailureStatus(round, history = []) {
+    if (!round || round.statuses.length === 0) return 'NO_RESPONSE';
+    const allStatuses = (history.length ? history : [round]).flatMap(item => item.statuses || []);
+    if (allStatuses.some(status => status.kind === 'timeout')) return 'MODEL_TIMEOUT';
+    if (allStatuses.some(status => status.kind === 'model_error')) return 'MODEL_ERROR';
+    if (allStatuses.length > 0 && allStatuses.every(status => status.kind === 'invalid_response')) return 'INVALID_RESPONSE';
+    return 'DISAGREEMENT';
   }
 
-  async solveRound(prompt, imageUrl, availableKeys = [], task = 'single_solve') {
-    const responses = await Promise.allSettled(this.models.map(model =>
-      this.sendSolveRequest(prompt, model, imageUrl, task)
-    ));
-    return responses
-      .filter(result => result.status === 'fulfilled')
-      .map(result => this.parseResult(result.value, availableKeys))
-      .filter(Boolean);
-  }
-
-  parseResult(result, availableKeys = []) {
-    if (!result) return null;
-
-    if (typeof result === 'object') {
-      if (result.dropdownAnswers) return { dropdownAnswers: result.dropdownAnswers };
-      if (result.answerText) return { answerText: result.answerText, answer: result.answerText };
-
-      if (Array.isArray(result.answers)) return this.parseMultipleChoiceAnswers(result, availableKeys);
-      if (Array.isArray(result.answer)) return this.parseMultipleChoiceAnswers({ answers: result.answer }, availableKeys);
-      if (typeof result.answer === 'string' && result.answer.includes(',')) {
-        return this.parseMultipleChoiceAnswers({ answers: result.answer.split(',') }, availableKeys);
-      }
-      if (result.answer) return this.parseSingleChoiceAnswer(result, availableKeys);
-      if (result.answers && typeof result.answers === 'object') return this.parseTrueFalseAnswers(result, availableKeys);
-    }
-
-    if (typeof result === 'string') {
-      const trimmed = result.trim();
-      // Chữ cái đơn
-      if (/^[A-Za-z0-9]$/.test(trimmed)) {
-        return this.parseSingleChoiceAnswer({ answer: trimmed.toUpperCase() }, availableKeys);
-      }
-      // Mảng
+  async solveRound(question, prompt) {
+    const settled = await Promise.all(this.models.map(async model => {
       try {
-        const parsed = JSON.parse(trimmed);
-        return this.parseResult(parsed, availableKeys);
-      } catch (e) {}
-
-      // Regex mảng
-      const arrMatch = trimmed.match(/\[\s*(?:["'][A-Za-z0-9]+["']\s*,?\s*)+\]/);
-      if (arrMatch) {
-        try { return this.parseResult(JSON.parse(arrMatch[0]), availableKeys); } catch (err) {}
+        const raw = await this.withTimeout(
+          this.sendSolveRequest(prompt, model, question.image, 'solve'),
+          this.roundTimeoutMs,
+          `Consensus round timed out for ${model}`
+        );
+        const parsed = this.normalizeResult(raw, question);
+        return parsed
+          ? { model, kind: 'valid', value: parsed }
+          : { model, kind: 'invalid_response' };
+      } catch (error) {
+        const message = String(error?.message || error || 'Unknown model error');
+        return { model, kind: /timed out|timeout|abort/i.test(message) ? 'timeout' : 'model_error' };
       }
+    }));
 
-      // Short answer
-      return { answerText: trimmed, answer: trimmed };
-    }
-
-    return null;
+    return {
+      results: settled.filter(item => item.kind === 'valid').map(item => item.value),
+      statuses: settled
+    };
   }
 
-  parseMultipleChoiceAnswers(result, availableKeys = []) {
-    if (!result || !result.answers) return null;
-    const rawList = Array.isArray(result.answers) ? result.answers : [result.answers];
-    const cleanAnswers = rawList
-      .map(k => String(k).trim().toUpperCase().replace(/[^A-Z0-9]/g, ''))
-      .filter(k => k && (availableKeys.length === 0 || availableKeys.includes(k)));
-    if (cleanAnswers.length === 0) return null;
-    return { answers: [...new Set(cleanAnswers)], reason: result.reason || '' };
+  withTimeout(promise, timeoutMs, message) {
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+  }
+
+  normalizeResult(raw, question) {
+    if (!raw || typeof raw !== 'object') return null;
+    switch (question.type) {
+      case 'multiple_choice': return this.normalizeMultiple(raw, question);
+      case 'true_false_group': return this.normalizeTrueFalse(raw, question);
+      case 'short_answer': return this.normalizeText(raw);
+      case 'dropdown_select': return this.normalizeDropdown(raw, question);
+      default: return this.normalizeSingle(raw, question);
+    }
+  }
+
+  normalizeSingle(raw, question) {
+    const allowed = new Set((question.options || []).map(option => String(option.key || '').trim().toUpperCase()).filter(Boolean));
+    const candidate = typeof raw.answer === 'string' ? raw.answer : (Array.isArray(raw.answers) && raw.answers.length === 1 ? raw.answers[0] : '');
+    const answer = String(candidate || '').trim().toUpperCase();
+    return allowed.has(answer) ? { answer } : null;
+  }
+
+  normalizeMultiple(raw, question) {
+    const allowed = new Set((question.options || []).map(option => String(option.key || '').trim().toUpperCase()).filter(Boolean));
+    const source = Array.isArray(raw.answers) ? raw.answers : (typeof raw.answer === 'string' ? raw.answer.split(',') : []);
+    if (source.length === 0) return null;
+    const answers = source.map(value => String(value).trim().toUpperCase()).filter(Boolean);
+    if (answers.some(answer => !allowed.has(answer))) return null;
+    return { answers: [...new Set(answers)].sort() };
+  }
+
+  normalizeTrueFalse(raw, question) {
+    const source = raw.answers;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    const expected = (question.items || []).map(item => String(item.key || '').trim().toUpperCase()).filter(Boolean);
+    if (expected.length === 0) return null;
+    const supplied = Object.keys(source).map(key => key.toUpperCase());
+    if (supplied.length !== expected.length || supplied.some(key => !expected.includes(key))) return null;
+    const answers = {};
+    for (const key of expected) {
+      const value = source[key] ?? source[key.toLowerCase()];
+      const normalized = String(value ?? '').trim().toLowerCase();
+      if (normalized === 'true' || normalized === 'đúng') answers[key] = 'true';
+      else if (normalized === 'false' || normalized === 'sai') answers[key] = 'false';
+      else return null;
+    }
+    return { answers };
+  }
+
+  normalizeText(raw) {
+    const text = typeof raw.answerText === 'string'
+      ? raw.answerText
+      : (typeof raw.answer === 'string' && typeof raw.raw === 'string' && raw.raw.trim() === raw.answer ? raw.answer : '');
+    const answerText = String(text || '').normalize('NFC').trim();
+    // Do not normalize punctuation or internal whitespace: they may be meaningful
+    // for code, assembly instructions, mathematical notation, or free text.
+    if (!answerText || answerText.length > 500 || /[\r\n]/.test(answerText)) return null;
+    return { answerText };
+  }
+
+  normalizeDropdown(raw, question) {
+    const source = raw.dropdownAnswers || raw.answers;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    const selects = question.selects || [];
+    if (selects.length === 0) return null;
+    const answers = {};
+    const usedKeys = new Set();
+    for (const select of selects) {
+      const aliases = [select.id, select.label].map(value => this.normalizedKey(value)).filter(Boolean);
+      const sourceKey = Object.keys(source).find(key => aliases.includes(this.normalizedKey(key)));
+      if (!sourceKey || usedKeys.has(sourceKey)) return null;
+      usedKeys.add(sourceKey);
+      const requested = this.normalizedValue(source[sourceKey]);
+      const option = (select.options || []).find(item => this.normalizedValue(item.text) === requested || this.normalizedValue(item.value) === requested);
+      if (!option) return null;
+      answers[select.id] = option.text;
+    }
+    if (Object.keys(source).length !== selects.length) return null;
+    return { dropdownAnswers: answers };
+  }
+
+  normalizedKey(value) {
+    return String(value || '').normalize('NFC').trim().toLocaleLowerCase();
+  }
+
+  normalizedValue(value) {
+    return String(value || '').normalize('NFC').trim().toLocaleLowerCase();
   }
 
   isUnanimous(results) {
-    if (results.length !== this.models.length) return false;
-    const answers = results.map(result => this.canonicalAnswer(result));
-    return answers.every(answer => answer === answers[0]);
+    return results.length === this.models.length && results.every(result => this.canonicalAnswer(result) === this.canonicalAnswer(results[0]));
   }
 
   canonicalAnswer(result) {
     if (!result) return '';
-    if (result.dropdownAnswers) {
-      return `dropdown:${Object.keys(result.dropdownAnswers).sort().map(key => `${key}:${result.dropdownAnswers[key]}`).join('|')}`;
-    }
-    if (result.answer) return `single:${String(result.answer).toUpperCase().trim()}`;
-    if (result.answers) {
-      if (Array.isArray(result.answers)) {
-        return `multi:${[...result.answers].map(k => String(k).trim().toUpperCase()).sort().join(',')}`;
-      }
-      return `tf:${Object.keys(result.answers).sort().map(key => `${key}:${result.answers[key]}`).join('|')}`;
-    }
-    if (result.answerText) return `text:${result.answerText}`;
+    if (result.answer) return `single:${String(result.answer).trim().toUpperCase()}`;
+    if (Array.isArray(result.answers)) return `multi:${[...result.answers].sort().join(',')}`;
+    // Assembly mnemonics, register names, and most text-entry graders are
+    // case-insensitive. Preserve the original text for filling the control,
+    // but compare an NFC/case-folded form for consensus. The two established
+    // hexadecimal spellings (0FFFFh and 0xFFFF) compare as the same value.
+    // Punctuation and internal whitespace remain untouched.
+    if (result.answerText) return `text:${this.canonicalTextEntry(result.answerText)}`;
+    if (result.dropdownAnswers) return `dropdown:${Object.keys(result.dropdownAnswers).sort().map(key => `${key}:${result.dropdownAnswers[key]}`).join('|')}`;
+    if (result.answers) return `tf:${Object.keys(result.answers).sort().map(key => `${key}:${result.answers[key]}`).join('|')}`;
     return '';
   }
 
-  parseTrueFalseAnswers(result, availableKeys = []) {
-    if (!result || !result.answers || typeof result.answers !== 'object' || Array.isArray(result.answers)) return null;
-    const expected = availableKeys.length > 0 ? [...new Set(availableKeys)] : Object.keys(result.answers).map(key => key.toUpperCase());
-    if (expected.length === 0) return { answers: result.answers };
-    const answers = {};
-    for (const key of expected) {
-      const raw = result.answers[key] ?? result.answers[key.toLowerCase()];
-      if (typeof raw !== 'string') continue;
-      const normalized = raw.trim().toLowerCase();
-      if (normalized === 'đúng' || normalized === 'true') answers[key] = 'Đúng';
-      else if (normalized === 'sai' || normalized === 'false') answers[key] = 'Sai';
+  canonicalTextEntry(value) {
+    const normalizeHex = (_match, digits) => {
+      try {
+        return `#HEX:${BigInt(`0x${digits}`).toString(16).toUpperCase()}`;
+      } catch (error) {
+        return String(digits).toUpperCase();
+      }
+    };
+    return String(value)
+      .normalize('NFC')
+      .trim()
+      .toLocaleUpperCase()
+      .replace(/\b0X([0-9A-F]+)\b/g, normalizeHex)
+      .replace(/\b([0-9A-F]+)H\b/g, normalizeHex);
+  }
+
+  buildPrompt(question) {
+    switch (question.type) {
+      case 'multiple_choice': return this.buildMultipleChoicePrompt(question);
+      case 'true_false_group': return this.buildTrueFalsePrompt(question);
+      case 'short_answer': return this.buildShortAnswerPrompt(question);
+      case 'dropdown_select': return this.buildDropdownPrompt(question);
+      default: return this.buildSingleChoicePrompt(question);
     }
-    return Object.keys(answers).length > 0 ? { answers } : { answers: result.answers };
   }
 
-  selectStrongestResult(results) {
-    return results
-      .filter(result => result && (result.answer || result.answers || result.answerText || result.dropdownAnswers))
-      .sort((a, b) => String(b.reason || '').length - String(a.reason || '').length)[0] || null;
+  buildBase(question) {
+    return `QUESTION: ${question.title}\n${question.passage ? `CONTEXT: ${question.passage}\n` : ''}`;
   }
 
-  buildDebatePrompt(q, results, round) {
-    return `${this.buildSingleChoicePrompt(q)}
-
-DEBATE ROUND ${round}: Các kết quả độc lập trước đó:
-${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
-
-Hãy đối chiếu kỹ lưỡng và CHỈ trả về DUY NHẤT một chữ cái đáp án đúng. Tuyệt đối không giải thích.`;
+  buildSingleChoicePrompt(question) {
+    return `You are a high-precision multiple-choice solver.\n${this.buildBase(question)}OPTIONS:\n${(question.options || []).map(option => `${option.key}. ${option.text}`).join('\n')}\nALLOWED_KEYS: [${(question.options || []).map(option => `"${option.key}"`).join(',')}]\nSolve internally. Return exactly one allowed uppercase key and nothing else.`;
   }
 
-  buildTrueFalseDebatePrompt(q, results, round) {
-    return `${this.solveTrueFalsePrompt(q)}
-
-DEBATE ROUND ${round}: Kiểm tra lại độc lập các kết quả sau:
-${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
-Trả về duy nhất JSON theo schema answers, không thêm văn bản.`;
+  buildMultipleChoicePrompt(question) {
+    return `You are a high-precision multiple-answer solver.\n${this.buildBase(question)}OPTIONS:\n${(question.options || []).map(option => `${option.key}. ${option.text}`).join('\n')}\nALLOWED_KEYS: [${(question.options || []).map(option => `"${option.key}"`).join(',')}]\nSelect every correct option. Return exactly one minified JSON array of allowed uppercase keys, for example ["A","C"]. No Markdown, explanation, or code fence.`;
   }
 
-  solveTrueFalsePrompt(q) {
-    return `Bạn là chuyên gia giải đề trắc nghiệm Đúng / Sai.
-ĐỀ BÀI: ${q.title}
-${q.passage ? `BÀI ĐỌC: ${q.passage}\n` : ''}
-CÁC Ý CẦN ĐÁNH GIÁ:
-${(q.items || []).map(it => `${it.key}. ${it.text}`).join('\n')}
-
-Trả về duy nhất JSON: {"answers":{"A":"Đúng","B":"Sai","C":"Đúng","D":"Sai"}}`;
+  buildTrueFalsePrompt(question) {
+    return `You are a high-precision true/false solver.\n${this.buildBase(question)}STATEMENTS:\n${(question.items || []).map(item => `${item.key}. ${item.text}`).join('\n')}\nReturn exactly one minified JSON object using every statement key and only boolean values, for example {"answers":{"A":true,"B":false}}. No Markdown or explanation.`;
   }
 
-  buildSingleChoicePrompt(q) {
-    return `You are a high-precision multiple-choice solver.
-QUESTION: ${q.title}
-${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
-OPTIONS:
-${(q.options || []).map(o => `${o.key}. ${o.text}`).join('\n')}
-
-ALLOWED_KEYS: [${(q.options || []).map(o => `"${o.key}"`).join(',')}]
-Solve internally. Return exactly one allowed uppercase key and nothing else.
-Valid output example: A`;
+  buildShortAnswerPrompt(question) {
+    return `You are a precise computer-architecture and assembly-language solver.\n${this.buildBase(question)}This is a fill-in-the-blank answer. Return exactly the value or instruction that must be entered. One plain-text line only; no JSON, Markdown, label, quotation marks, explanation, or leading/trailing whitespace.`;
   }
 
-  buildMultipleChoicePrompt(q) {
-    return `You are a high-precision multiple-answer solver.
-QUESTION: ${q.title}
-${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
-OPTIONS:
-${(q.options || []).map(o => `${o.key}. ${o.text}`).join('\n')}
-
-ALLOWED_KEYS: [${(q.options || []).map(o => `"${o.key}"`).join(',')}]
-Select every correct option and solve internally.
-STRICT OUTPUT: return exactly one minified JSON array of allowed uppercase keys, on one line, with no whitespace, Markdown, code fence, explanation, or trailing newline.
-Valid output example: ["A","C"]`;
+  buildDropdownPrompt(question) {
+    const dropdowns = (question.selects || []).map(select => `${select.id}: [${(select.options || []).map(option => option.text).join(', ')}]`).join('\n');
+    return `You are a precise matching-dropdown solver.\n${this.buildBase(question)}DROPDOWNS AND ALLOWED VALUES:\n${dropdowns}\nReturn exactly one minified JSON object with every dropdown id and an allowed option text, for example {"answers":{"select_1":"value"}}. No Markdown or explanation.`;
   }
 
-  buildMultipleChoiceDebatePrompt(q, results, round) {
-    return `${this.buildMultipleChoicePrompt(q)}
-
-DEBATE ROUND ${round}: Các kết quả độc lập trước đó:
-${results.map((result, index) => `MODEL ${index + 1}: ${JSON.stringify(result)}`).join('\n')}
-
-Re-solve from scratch, compare every option, then return ONLY a JSON array of answer letters (e.g. ["A", "C"]).`;
+  buildDebatePrompt(question, results, attempt) {
+    return `${this.buildPrompt(question)}\n\nREVIEW ROUND ${attempt}: Independent candidate outputs were ${results.length ? results.map(result => JSON.stringify(result)).join(', ') : 'unavailable'}. Re-solve independently. Do not follow a candidate merely to agree. Obey the exact output contract above.`;
   }
 
-  buildShortAnswerPrompt(q) {
-    return `You are a precise computer-architecture and assembly-language solver.
-QUESTION: ${q.title}
-${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
-
-This is a fill-in-the-blank answer. Solve internally, then return exactly the value or instruction that must be entered in the input field.
-STRICT OUTPUT: one plain-text line only; no JSON, Markdown, code fence, label, explanation, quotation marks, or leading/trailing whitespace.
-Examples: FE67 | 104 | and EAX,FFFFF000`;
-  }
-
-  buildDropdownPrompt(q) {
-    const list = (q.selects || []).map(s => {
-      const optTexts = (s.options || []).map(o => o.text).filter(t => t && t !== 'Choose...');
-      return `- ${s.label || s.id}: [${optTexts.join(', ')}]`;
-    }).join('\n');
-
-    return `You are a precise computer-architecture and assembly-language solver for matching dropdowns.
-QUESTION: ${q.title}
-${q.passage ? `CONTEXT: ${q.passage}\n` : ''}
-DROPDOWNS AND ALLOWED VALUES:
-${list}
-
-Solve internally. Return exactly one minified JSON object on one ASCII line, with no Markdown, code fence, explanation, or extra keys.
-Use each dropdown label exactly as supplied and an allowed option text exactly as supplied.
-Exact shape: {"answers":{"CX":"FE67","BX":"67FE"}}`;
-  }
-
-  async sendSolveRequest(prompt, model, imageUrl, task = 'solve') {
+  sendSolveRequest(prompt, model, imageUrl, task = 'solve') {
     const config = typeof APP_CONFIG !== 'undefined' ? APP_CONFIG : {};
     return new Promise((resolve, reject) => {
       const action = globalThis.MessageActions?.CALL_KEY4U_AI || 'CALL_KEY4U_AI';
       chrome.runtime.sendMessage({
-        action: action,
-        prompt: prompt,
-        model: model,
-        imageUrl: imageUrl,
-        task: task,
+        action, prompt, model, imageUrl, task,
         enableReasoning: config.ENABLE_REASONING !== false,
         reasoningEffort: config.REASONING_EFFORT || 'high'
-      }, res => {
-        if (chrome.runtime.lastError) {
-          return reject(new Error(chrome.runtime.lastError.message));
-        }
-        if (res && res.success) {
-          resolve(res.data);
-        } else {
-          reject(new Error(res?.error || 'AI Request failed'));
-        }
+      }, response => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (response?.success) return resolve(response.data);
+        return reject(new Error(response?.error || 'AI request failed'));
       });
     });
-  }
-
-  parseSingleChoiceAnswer(res, availableKeys = []) {
-    if (!res) return null;
-    let key = '';
-
-    if (typeof res === 'object' && res.answer) {
-      key = String(res.answer).toUpperCase().trim();
-    } else if (typeof res === 'string') {
-      const trimmed = res.trim();
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed && typeof parsed.answer === 'string') key = parsed.answer.toUpperCase().trim();
-      } catch (e) {
-        if (/^[A-Za-z0-9]$/.test(trimmed)) key = trimmed.toUpperCase();
-      }
-    }
-
-    if (key && (availableKeys.length === 0 || availableKeys.includes(key))) {
-      const result = { answer: key };
-      if (typeof res === 'object' && typeof res.reason === 'string') {
-        result.reason = res.reason;
-      }
-      return result;
-    }
-
-    if (key) {
-      return { answer: key };
-    }
-    return null;
   }
 }
 
 globalThis.ConsensusSolverEngine = ConsensusSolverEngine;
-
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { ConsensusSolverEngine };
-}
+if (typeof module !== 'undefined' && module.exports) module.exports = { ConsensusSolverEngine };

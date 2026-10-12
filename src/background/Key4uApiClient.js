@@ -106,11 +106,10 @@ class Key4uApiClient {
       firstError = err.name === 'AbortError' ? `Key4U API quá thời gian (${Math.round(requestTimeout / 1000)}s)` : err.message;
     }
 
-    // Tự động đổi model theo danh sách backup đa tầng
-    // Thử model dự phòng cho mọi lỗi request. Riêng lỗi 401/403 thường là
-    // lỗi key hoặc quyền, nhưng vẫn cần thử vì gateway có thể áp chính sách
-    // khác nhau theo model.
-    if (!res || !res.ok) {
+    // Retry only transient transport/server failures with a backup model.
+    // Retrying 4xx authentication, validation, or quota failures wastes quota
+    // and masks the actionable error from the consensus engine.
+    if ((!res || !res.ok) && this.shouldTryBackupModel(res)) {
       for (let bIdx = 0; bIdx < this.backupModels.length; bIdx++) {
         const backupModel = this.backupModels[bIdx];
         if (backupModel === m) continue;
@@ -260,6 +259,11 @@ class Key4uApiClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  shouldTryBackupModel(response) {
+    if (!response) return true;
+    return response.status === 408 || response.status === 425 || response.status >= 500;
   }
 
   extractCompactAnswer(text) {

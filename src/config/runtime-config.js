@@ -27,10 +27,13 @@ if (typeof console !== 'undefined') {
     SCREENSHOT_UPLOAD_MAX_BYTES: 6000000,
 
     // 3. AI MODELS & API KEY
-    DEFAULT_MODEL: 'claude-opus-4-8',
-    CONSENSUS_MODEL: 'gemini-3.5-flash',
-    DETECT_MODEL: 'gemini-3.5-flash',
-    KEY4U_API_KEY: 'sk-QFWlsdzH2xz7iCcVdyFSLI4qMn6ZCzxVptPkUuAgBzoMLub0'
+    DEFAULT_MODEL: 'gemini-3.7-flash',
+    CONSENSUS_MODEL: 'gemini-3.7-flash',
+    CONSENSUS_MODELS: ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+    DETECT_MODEL: 'gemini-3.7-flash',
+    // Credentials are read by the background worker from chrome.storage.local.
+    // Never ship a live API key in an extension source file or built bundle.
+    KEY4U_API_KEY: ''
   };
 
   var reasoningHelper = function () {

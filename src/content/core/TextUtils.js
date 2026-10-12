@@ -50,15 +50,34 @@ class TextUtils {
       .trim();
   }
 
-  static hashQuestion(question) {
-    const parts = [question?.title || '', question?.passage || ''];
+  static hashQuestion(question, cacheContext = '') {
+    const parts = [
+      `cache:${typeof CACHE_KEY_VERSION !== 'undefined' ? CACHE_KEY_VERSION : '2'}`,
+      `context:${cacheContext || ''}`,
+      `type:${question?.type || 'single_choice'}`,
+      question?.title || '',
+      question?.passage || ''
+    ];
     if (Array.isArray(question?.options)) {
       parts.push(...question.options.map(o => `${o.key}:${o.text}`));
     }
     if (Array.isArray(question?.items)) {
       parts.push(...question.items.map(o => `${o.key}:${o.text}`));
     }
-    const input = TextUtils.normalizeForMatch(parts.join('\n'));
+    if (Array.isArray(question?.selects)) {
+      question.selects.forEach(select => {
+        parts.push(`select:${select.id || ''}:${select.label || ''}`);
+        parts.push(...(select.options || []).map(option => `${option.value || ''}:${option.text || ''}`));
+      });
+    }
+    // Cache keys deliberately preserve punctuation, case, and meaningful internal
+    // whitespace. This is not answer matching: collapsing those characters can
+    // make two code/math questions share an incorrect cached result.
+    const input = parts.join('\n')
+      .normalize('NFC')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n?/g, '\n')
+      .trim();
     let hash = 2166136261;
     for (let i = 0; i < input.length; i++) {
       hash ^= input.charCodeAt(i);

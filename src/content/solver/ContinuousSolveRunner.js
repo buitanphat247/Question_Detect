@@ -8,12 +8,45 @@ class ContinuousSolveRunner {
       : options;
     this.solverEngine = solverEngineOrOptions?.solverEngine || solverEngineOrOptions;
     this.isSolvingProcess = false;
+    this.requestSequence = 0;
+    this.activeRequestId = 0;
     this.onAutoAdvance = config.onAutoAdvance || this.defaultAutoAdvance.bind(this);
     this.isAutoAdvanceEnabled = config.isAutoAdvanceEnabled || (() => false);
   }
 
   stop() {
     this.isSolvingProcess = false;
+    // Invalidate any in-flight response. The background request may still finish,
+    // but it can no longer update this page.
+    this.activeRequestId = ++this.requestSequence;
+  }
+
+  getCacheContext() {
+    const models = Array.isArray(this.solverEngine?.models) ? this.solverEngine.models.join(',') : '';
+    const normalization = typeof ANSWER_NORMALIZATION_VERSION !== 'undefined' ? ANSWER_NORMALIZATION_VERSION : '2';
+    return `models:${models}|normalization:${normalization}`;
+  }
+
+  getQuestionFingerprint(question) {
+    if (!question || typeof TextUtils === 'undefined' || typeof TextUtils.hashQuestion !== 'function') return '';
+    return TextUtils.hashQuestion(question, this.getCacheContext());
+  }
+
+  beginRequest(question) {
+    const id = ++this.requestSequence;
+    this.activeRequestId = id;
+    return { id, fingerprint: this.getQuestionFingerprint(question), element: question?.element };
+  }
+
+  isRequestCurrent(request, question) {
+    if (!request || !question || !this.isSolvingProcess || request.id !== this.activeRequestId) return false;
+    if (!question.element?.isConnected || request.element !== question.element) return false;
+    const latest = (ExamDomScanner.scanAll() || []).find(candidate => candidate.element === question.element || candidate.id === question.id);
+    return !!latest && this.getQuestionFingerprint(latest) === request.fingerprint;
+  }
+
+  canApplyResult(request, question, result) {
+    return this.isRequestCurrent(request, question) && result?.consensus === true;
   }
 
   isQuestionVisible(q) {
@@ -88,13 +121,16 @@ class ContinuousSolveRunner {
       // Chọn câu hỏi đang hiển thị trên màn hình hiện tại
       let targetQ = this.findActiveQuestion(questions);
       if (!targetQ) targetQ = questions[0];
+      const request = this.beginRequest(targetQ);
 
       StealthToastNotifier.show(`Đang giải câu ${targetQ.num}...`, 'info', 2000);
 
       const cached = await this.getCachedResult(targetQ);
+      if (!this.isRequestCurrent(request, targetQ)) return;
       const result = cached || await this.solverEngine.solveQuestion(targetQ);
-      if (result && result.consensus !== false) {
+      if (this.canApplyResult(request, targetQ, result)) {
         if (!cached && result.consensus === true) this.saveCachedResult(targetQ, result);
+        DomAnswerClicker.clearSuggestedMarkers(targetQ.element);
 
         // 1. Câu hỏi Đúng / Sai
         if (targetQ.type === 'true_false_group' && result.answers) {
@@ -116,7 +152,7 @@ class ContinuousSolveRunner {
         else if (targetQ.type === 'short_answer') {
           const textToFill = result.answerText || result.answer || '';
           const targetInp = targetQ.input || targetQ.inputs?.[0];
-          if (targetInp && textToFill) {
+          if (targetInp && textToFill && !String(targetInp.value || '').trim()) {
             DomAnswerClicker.fillTextInput(targetInp, textToFill);
             StealthToastNotifier.show(`Câu ${targetQ.num}: đã điền [${textToFill}]`, 'success', 2200);
           }
@@ -217,13 +253,17 @@ class ContinuousSolveRunner {
       const targetQuestions = visibleQuestions.length > 0 ? visibleQuestions : questions;
 
       for (const q of targetQuestions) {
+        if (!this.isSolvingProcess) break;
         if (this.isQuestionAnswered(q)) continue;
+        const request = this.beginRequest(q);
 
         StealthToastNotifier.show(`Đang giải câu ${q.num}...`, 'info', 1500);
         const cached = await this.getCachedResult(q);
+        if (!this.isRequestCurrent(request, q)) continue;
         const result = cached || await this.solverEngine.solveQuestion(q);
-        if (result && result.consensus !== false) {
+        if (this.canApplyResult(request, q, result)) {
           if (!cached && result.consensus === true) this.saveCachedResult(q, result);
+          DomAnswerClicker.clearSuggestedMarkers(q.element);
 
           if (q.type === 'true_false_group' && result.answers) {
             Object.entries(result.answers).forEach(([key, val]) => {
@@ -241,7 +281,7 @@ class ContinuousSolveRunner {
           } else if (q.type === 'short_answer') {
             const textToFill = result.answerText || result.answer || '';
             const targetInp = q.input || q.inputs?.[0];
-            if (targetInp && textToFill) {
+            if (targetInp && textToFill && !String(targetInp.value || '').trim()) {
               DomAnswerClicker.fillTextInput(targetInp, textToFill);
             }
           } else if (q.type === 'dropdown_select') {
@@ -305,10 +345,10 @@ class ContinuousSolveRunner {
         await new Promise(r => setTimeout(r, 600));
       }
 
-      if (this.isAutoAdvanceEnabled() && !DomAnswerClicker.MANUAL_REVIEW_MODE) {
+      if (this.isSolvingProcess && this.isAutoAdvanceEnabled() && !DomAnswerClicker.MANUAL_REVIEW_MODE) {
         StealthToastNotifier.show('Đã giải xong các câu trên trang này!', 'success', 2500);
         this.onAutoAdvance();
-      } else if (this.isAutoAdvanceEnabled() && DomAnswerClicker.MANUAL_REVIEW_MODE) {
+      } else if (this.isSolvingProcess && this.isAutoAdvanceEnabled() && DomAnswerClicker.MANUAL_REVIEW_MODE) {
         StealthToastNotifier.show('Đã đánh dấu gợi ý. Hãy tự chọn đáp án trước khi chuyển trang.', 'info', 3000);
       }
     } catch (err) {
@@ -349,12 +389,12 @@ class ContinuousSolveRunner {
     if (typeof isSupabaseCacheEnabled === 'function' && !isSupabaseCacheEnabled()) return null;
     if (!q || typeof TextUtils === 'undefined' || typeof TextUtils.hashQuestion !== 'function') return null;
     try {
-      const hash = TextUtils.hashQuestion(q);
+      const hash = this.getQuestionFingerprint(q);
       const action = globalThis.MessageActions?.CHECK_SUPABASE_BATCH || 'CHECK_SUPABASE_BATCH';
       const response = await new Promise(resolve => chrome.runtime.sendMessage({ action, hashes: [hash] }, resolve));
       const item = response?.data?.[hash];
       const answer = item?.answer;
-      return answer && answer.consensus === true ? answer : null;
+      return answer && answer.consensus === true && answer.cacheContext === this.getCacheContext() ? answer : null;
     } catch (e) { return null; }
   }
 
@@ -365,10 +405,10 @@ class ContinuousSolveRunner {
       const action = globalThis.MessageActions?.SAVE_SUPABASE_CACHE || 'SAVE_SUPABASE_CACHE';
       chrome.runtime.sendMessage({
         action,
-        hash: TextUtils.hashQuestion(q),
+        hash: this.getQuestionFingerprint(q),
         questionText: q.title,
         translatedText: q.passage || null,
-        answer: result
+        answer: { ...result, cacheContext: this.getCacheContext() }
       }, () => {});
     } catch (e) {}
   }
